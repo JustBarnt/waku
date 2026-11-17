@@ -63,6 +63,14 @@ callbacks are marshalled to it.
   fallback. A failed jump logs `virtual desktops: jump failed: <reason>` and does nothing.
   Keystrokes (Win+Ctrl+Left/Right) were tried first and dropped: Windows ignores a key pressed while
   the last switch animates, so a switch of several desktops moved one.
+- **Focus.** The shell call switches but leaves the focus where it was: on a window of the previous
+  desktop, now cloaked, which still takes the keyboard. After a switch through the shell interface
+  (700 ms, or 100 ms unanimated) and after `move` sends the foreground window away (100 ms), a timer
+  on the hidden anchor window gives the focus to the top window of the shown desktop, or to the
+  desktop itself when it has none, with `kernel::forceForegroundFocus` (a plain
+  `SetForegroundWindow` is refused: waku did not receive the last input). A visible, uncloaked
+  window of another process that already has the focus keeps it. A second switch before the timer
+  fires restarts it.
 - **Monitors.** Desktops are not per monitor, so the model has one entry with handle 0 that every
   bar shows (`Workspaces.qml` accepts handle 0).
 - **Create.** `switchTo` with the index just past the last desktop (below 20) creates the next
@@ -137,8 +145,8 @@ re-verifies the manager against the registry as for switch and close.
 - A view exists only for a window the shell tracks. A window without a view (some tool windows)
   falls through to the documented call, which refuses it.
 
-- Focus after `SwitchDesktop` is not guaranteed; the animated call is the default for that reason
-  and for parity with the keyboard.
+- The focus after a switch is set by waku (see "Focus"), not by Windows; which window was focused
+  last on the shown desktop is not tracked, the top of the z-order wins.
 - Whether `GetDesktops` order equals the registry order is verified only for the count and for
   one desktop on the build above; the self-test refuses to open the interface otherwise.
 - Notification delivery was not observed on the research machine; the registry watch covers it.

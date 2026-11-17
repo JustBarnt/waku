@@ -25,6 +25,7 @@
 #include "features/workspaces/win32/shell_desktops_win.h"
 #include "kernel/qt/live_desktop.h"
 #include "kernel/win32/com_scope.h"
+#include "kernel/win32/window_focus.h"
 
 namespace waku::workspaces::vdesk {
 namespace {
@@ -76,11 +77,39 @@ QString guidKey(const GUID& id) {
 
 constexpr wchar_t kAnchorClass[] = L"WakuVirtualDesktopAnchor";
 constexpr UINT_PTR kHideTimer = 1;
+constexpr UINT_PTR kFocusTimer = 2;
 constexpr UINT kHideAfterMs = 700;  // the switch animation has ended
+constexpr UINT kSettleMs = 100;     // an unanimated switch or a window move has settled
 
-// The anchor held the focus during the switch. When it goes away, the top window of the shown
-// desktop takes it, so the keyboard does not land on whatever Windows picks.
+bool isCloaked(HWND hwnd) {
+  DWORD cloaked = 0;
+  return SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) &&
+         cloaked != 0;
+}
+
+// Whether the foreground window is one the user can see and type into on the shown desktop. After
+// a switch through the shell interface Windows leaves the focus where it was: on a window of the
+// previous desktop, now cloaked, which still takes the keyboard. A window of waku (a bar that was
+// clicked, the jump anchor) and the shell's own windows do not count either.
+bool foregroundIsSettled() {
+  const HWND foreground = GetForegroundWindow();
+  if (!foreground || !IsWindowVisible(foreground) || IsIconic(foreground)) return false;
+  if (isCloaked(foreground)) return false;
+  DWORD pid = 0;
+  GetWindowThreadProcessId(foreground, &pid);
+  if (pid == GetCurrentProcessId()) return false;
+  wchar_t cls[64] = {};
+  GetClassNameW(foreground, cls, 64);
+  return wcscmp(cls, L"Progman") != 0 && wcscmp(cls, L"WorkerW") != 0 &&
+         wcscmp(cls, L"Shell_TrayWnd") != 0 && wcscmp(cls, L"Shell_SecondaryTrayWnd") != 0;
+}
+
+// After a switch (or after the focused window was sent to another desktop) the top window of the
+// shown desktop takes the focus, as it does when the user presses Win+Ctrl+Arrow. A desktop
+// without windows gives it to the desktop itself, so the keyboard never stays on a hidden window.
+// A window Windows already focused on the shown desktop keeps it.
 void focusTopWindow() {
+  if (foregroundIsSettled()) return;
   struct Found {
     HWND hwnd = nullptr;
   } found;
@@ -96,13 +125,20 @@ void focusTopWindow() {
         return FALSE;
       },
       reinterpret_cast<LPARAM>(&found));
-  if (found.hwnd) SetForegroundWindow(found.hwnd);
+  // SetForegroundWindow alone is refused: waku did not receive the last input.
+  const HWND target = found.hwnd ? found.hwnd : GetShellWindow();
+  if (target) kernel::forceForegroundFocus(reinterpret_cast<std::uintptr_t>(target));
 }
 
 LRESULT CALLBACK anchorProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
   if (message == WM_TIMER && wParam == kHideTimer) {
     KillTimer(hwnd, kHideTimer);
     ShowWindow(hwnd, SW_HIDE);
+    focusTopWindow();
+    return 0;
+  }
+  if (message == WM_TIMER && wParam == kFocusTimer) {
+    KillTimer(hwnd, kFocusTimer);
     focusTopWindow();
     return 0;
   }
@@ -123,7 +159,12 @@ class Win32VirtualDesktopSystem final : public VirtualDesktopSystem {
       // A desktop that was just created may not be in the registry yet; the shell knows it.
       if (index >= ids.size()) ids = api->desktopIds().value_or(ids);
       const bool known = index >= 0 && index < ids.size();
-      if (known && api->switchTo(ids.at(index), animate_)) return true;
+      if (known && api->switchTo(ids.at(index), animate_)) {
+        // The shell switches but does not move the focus: give it to the shown desktop once the
+        // switch is over.
+        scheduleFocus(animate_ ? kHideAfterMs : kSettleMs);
+        return true;
+      }
       checkLost();
       // Falls through to the anchor window: the shell refused or is not there.
     }
@@ -143,7 +184,11 @@ class Win32VirtualDesktopSystem final : public VirtualDesktopSystem {
     DWORD pid = 0;
     GetWindowThreadProcessId(hwnd, &pid);
     if (pid == GetCurrentProcessId()) return MoveResult::OwnWindow;
-    return moveWindow(static_cast<quint64>(reinterpret_cast<quintptr>(hwnd)), index);
+    const MoveResult result =
+        moveWindow(static_cast<quint64>(reinterpret_cast<quintptr>(hwnd)), index);
+    // The focused window left: the view stays, so the focus goes to what is left on it.
+    if (result == MoveResult::Moved) scheduleFocus(kSettleMs);
+    return result;
   }
 
   // The shell's move first: it works for windows of other processes. The documented call is the
@@ -298,6 +343,13 @@ class Win32VirtualDesktopSystem final : public VirtualDesktopSystem {
   }
 
  private:
+  // Runs focusTopWindow on the anchor's timer after `delayMs`; a later call restarts it, so a
+  // quick second switch focuses once, at its own end. The anchor stays hidden.
+  void scheduleFocus(UINT delayMs) {
+    if (!anchor_ && !createAnchor()) return;
+    SetTimer(anchor_, kFocusTimer, delayMs, nullptr);
+  }
+
   enum class ApiState { Untried, Open, Lost, Unavailable };
 
   static QStringList registryIds() {
