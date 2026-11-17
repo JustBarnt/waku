@@ -33,8 +33,8 @@ namespace waku::tiling {
 //             "mainStackTop", "columns", "rows", "bsp", "grid" or "centerMain" (see layouts())
 //   gap       pixels between windows and around them (default 8)
 //   ratio     the share of the width of the main window (default 0.5; a height share in
-//   mainStackTop) rules     [{process, class, title, action}]: `action` is "ignore" (default) or
-//   "float";
+//   mainStackTop) rules     [{process, class, title, action}]: `action` is "ignore" (default),
+//   "float" or "tile" (manage a window that has no resize border or no caption);
 //             `process` and `class` match whole and without case, `title` is a regular expression.
 //             No rule ships by default beyond the built-in splash and shell classes
 //   active    true while the tiler runs: enabled and on the live desktop

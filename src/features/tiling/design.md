@@ -10,7 +10,8 @@ Component.onCompleted: {
     Tiling.gap = 8
     Tiling.ratio = 0.5
     Tiling.rules = [{ process: "Calculator.exe", action: "float" },
-                    { class: "TaskManagerWindow", action: "ignore" }]
+                    { class: "TaskManagerWindow", action: "ignore" },
+                    { process: "Game.exe", action: "tile" }]
     Tiling.enabled = true
 }
 ```
@@ -21,7 +22,7 @@ Component.onCompleted: {
 |---|---|
 | `layouts.*` | pure geometry: `layoutSlots`, `outerRect` (border compensation), names |
 | `tiling_model.*` | per `(HMONITOR, desktop GUID)` ordered slots (a slot is one window or a stack of windows), layout override, float set |
-| `tiling_rules.*` | user rules (`process`, `class`, `title` regex -> `ignore` or `float`) and `classify`, the eligibility function |
+| `tiling_rules.*` | user rules (`process`, `class`, `title` regex -> `ignore`, `float` or `tile`) and `classify`, the eligibility function |
 | `window_placer.h` | the interface to the machine: enumerate, query facts, work area, shown desktop, `place`, `raise`, `activate` |
 | `tiling_engine.*` | the behaviour: events in, placements out |
 | `tiling_events.h` | event kinds, WinEvent codes, the `TilingHooks` interface |
@@ -74,6 +75,11 @@ startup; fullscreen; a splash or shell class (`isBuiltinIgnoredClass`); ignored 
 window of an elevated process while waku is not elevated (UIPI forbids moving it; unmanaged, no error).
 A `float` rule keeps the window, unplaced; `toggle` tiles it. A maximized managed window keeps its
 place in the stack but takes no slot.
+
+A `tile` rule manages a window that has no `WS_THICKFRAME` or no `WS_CAPTION` (a game with a
+fixed-size or frameless window). It lifts those two checks only: a fullscreen, maximized, tool or
+elevated window stays unmanaged. Whether the window redraws at the size of its slot is up to the
+application; one that refuses the size is handled like any other clamped window.
 
 On load or shell reload, the initial scan waits one event-loop turn so the shell can set its rules.
 It restores otherwise eligible maximized windows with `ShowWindowAsync(SW_SHOWNOACTIVATE)` and waits

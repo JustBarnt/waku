@@ -107,6 +107,63 @@ TEST(TilingRules, AFloatRuleGivesFloatAndForceTileOverridesIt) {
   EXPECT_EQ(classify(tileable(), rules, false, true).verdict, Verdict::Manage);
 }
 
+TEST(TilingRules, ATileRuleManagesAWindowWithoutAThickFrameOrCaption) {
+  const auto rules =
+      parseRules({rule(QStringLiteral("notepad.exe"), QStringLiteral("tile"))}).rules;
+  ASSERT_EQ(rules.size(), 1u);
+  EXPECT_EQ(rules[0].action, RuleAction::Tile);
+
+  WindowFacts fixedSize = tileable();
+  fixedSize.thickFrame = false;
+  EXPECT_EQ(classify(fixedSize, {}, false).verdict, Verdict::Ignore);
+  EXPECT_EQ(classify(fixedSize, rules, false).verdict, Verdict::Manage);
+
+  WindowFacts frameless = tileable();
+  frameless.thickFrame = false;
+  frameless.caption = false;
+  EXPECT_EQ(classify(frameless, rules, false).verdict, Verdict::Manage);
+  // The rule holds when the user forces the window too.
+  EXPECT_EQ(classify(frameless, rules, false, true).verdict, Verdict::Manage);
+  // An ordinary window under a tile rule is managed as before.
+  EXPECT_EQ(classify(tileable(), rules, false).verdict, Verdict::Manage);
+}
+
+TEST(TilingRules, ATileRuleOnlyMatchesItsOwnWindow) {
+  const auto rules = parseRules({rule(QStringLiteral("game.exe"), QStringLiteral("tile"))}).rules;
+  WindowFacts fixedSize = tileable();
+  fixedSize.thickFrame = false;
+  const Eligibility other = classify(fixedSize, rules, false);
+  EXPECT_EQ(other.verdict, Verdict::Ignore);
+  EXPECT_EQ(other.reason, QStringLiteral("not resizable"));
+  fixedSize.thickFrame = true;
+  fixedSize.caption = false;
+  EXPECT_EQ(classify(fixedSize, rules, false).reason, QStringLiteral("no caption"));
+}
+
+TEST(TilingRules, ATileRuleLiftsOnlyTheFrameChecks) {
+  const auto rules =
+      parseRules({rule(QStringLiteral("notepad.exe"), QStringLiteral("tile"))}).rules;
+  struct Case {
+    const char* name;
+    void (*apply)(WindowFacts&);
+  };
+  const Case cases[] = {
+      {"invisible", [](WindowFacts& f) { f.visible = false; }},
+      {"own process", [](WindowFacts& f) { f.ownProcess = true; }},
+      {"owned", [](WindowFacts& f) { f.ownedByVisible = true; }},
+      {"tool window", [](WindowFacts& f) { f.toolWindow = true; }},
+      {"maximized", [](WindowFacts& f) { f.zoomed = true; }},
+      {"fullscreen", [](WindowFacts& f) { f.fullscreen = true; }},
+      {"elevated", [](WindowFacts& f) { f.elevated = true; }},
+  };
+  for (const Case& c : cases) {
+    WindowFacts facts = tileable();
+    facts.thickFrame = false;
+    c.apply(facts);
+    EXPECT_EQ(classify(facts, rules, false).verdict, Verdict::Ignore) << c.name;
+  }
+}
+
 TEST(TilingRules, AllSetFieldsMustMatch) {
   const auto rules =
       parseRules({QVariantMap{{QStringLiteral("process"), QStringLiteral("notepad.exe")},

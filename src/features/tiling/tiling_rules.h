@@ -14,6 +14,7 @@ namespace waku::tiling {
 enum class RuleAction {
   Ignore,  // never managed: the tiler leaves the window alone
   Float,   // managed as a floating window: never placed, but toggleFloat can tile it
+  Tile,    // managed even without a thick frame or a caption (a game with a fixed-size window)
 };
 
 // One user rule. A rule matches when every field it sets matches: `process` and `className` are
@@ -30,9 +31,9 @@ struct ParsedRules {
   QStringList errors;  // one line per entry that was skipped
 };
 
-// The rules of the shell: a list of maps `{process, class, title, action}` (`action` is "ignore" or
-// "float", default "ignore"). An entry that sets no matcher, has an unknown action or a title that
-// is not a valid regular expression is skipped and reported in `errors`.
+// The rules of the shell: a list of maps `{process, class, title, action}` (`action` is "ignore",
+// "float" or "tile", default "ignore"). An entry that sets no matcher, has an unknown action or a
+// title that is not a valid regular expression is skipped and reported in `errors`.
 ParsedRules parseRules(const QVariantList& entries);
 
 // The action of the first rule that matches, or nothing.
@@ -58,10 +59,11 @@ struct Eligibility {
 
 // Whether a window belongs to the tiler. A window is managed unless it is: not visible, cloaked,
 // iconic (Retry), untitled (Retry), a window of waku, owned by a visible owner, a tool window,
-// without a thick frame or caption, maximized, fullscreen, of a built-in ignored class,
-// ignored by a rule (a `float` rule gives Float), or the window of an elevated process while waku
-// is not elevated (UIPI forbids moving it). `forceTile` skips the user rules and the float
-// verdict: the user asked for this window.
+// without a thick frame or caption (unless a `tile` rule matches it), maximized, fullscreen, of a
+// built-in ignored class, ignored by a rule (a `float` rule gives Float), or the window of an
+// elevated process while waku is not elevated (UIPI forbids moving it). A `tile` rule lifts the
+// two frame checks only: every other disqualifier still holds. `forceTile` skips the `ignore` and
+// `float` rules and the float verdict: the user asked for this window.
 Eligibility classify(const WindowFacts& facts, const std::vector<Rule>& rules, bool selfElevated,
                      bool forceTile = false);
 

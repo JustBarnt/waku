@@ -38,8 +38,11 @@ ParsedRules parseRules(const QVariantList& entries) {
       rule.action = RuleAction::Ignore;
     } else if (action == QLatin1String("float")) {
       rule.action = RuleAction::Float;
+    } else if (action == QLatin1String("tile")) {
+      rule.action = RuleAction::Tile;
     } else {
-      out.errors << where + QStringLiteral("unknown action '%1' (ignore or float)").arg(action);
+      out.errors
+          << where + QStringLiteral("unknown action '%1' (ignore, float or tile)").arg(action);
       continue;
     }
     out.rules.push_back(std::move(rule));
@@ -98,8 +101,12 @@ Eligibility classify(const WindowFacts& facts, const std::vector<Rule>& rules, b
   if (facts.title.isEmpty()) return {Verdict::Retry, QStringLiteral("untitled")};
   if (facts.ownedByVisible) return ignore("owned by a visible window");
   if (facts.toolWindow) return ignore("tool window", true);
-  if (!facts.thickFrame) return ignore("not resizable", true);
-  if (!facts.caption) return ignore("no caption", true);
+  // A `tile` rule opts a window in past the two frame checks: a game in windowed mode often has a
+  // fixed-size or frameless window, which SetWindowPos still moves and sizes. The rules are only
+  // consulted for a window that fails a check, so an ordinary window costs nothing extra.
+  if ((!facts.thickFrame || !facts.caption) && matchRules(rules, facts) != RuleAction::Tile) {
+    return ignore(facts.thickFrame ? "no caption" : "not resizable", true);
+  }
   if (facts.zoomed) return ignore("maximized");
   if (facts.fullscreen) return ignore("fullscreen");
   if (isBuiltinIgnoredClass(facts.className)) return ignore("ignored class", true);
