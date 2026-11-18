@@ -73,8 +73,13 @@ A window is managed unless: not visible; cloaked; minimized or untitled (retry);
 owned by a visible window; a tool window; without `WS_THICKFRAME` or `WS_CAPTION`; maximized after
 startup; fullscreen; a splash or shell class (`isBuiltinIgnoredClass`); ignored by a rule; or the
 window of an elevated process while waku is not elevated (UIPI forbids moving it; unmanaged, no error).
-A `float` rule keeps the window, unplaced; `toggle` tiles it. A maximized managed window keeps its
-place in the stack but takes no slot.
+A `float` rule keeps the window, unplaced; `toggle` tiles it. A tiled window that `toggle` or
+`float` takes out of the layout gets back the size it had before the tiler first placed it (its
+launch size, or its size when waku started), centred on the tile it leaves and kept inside the
+work area. When a floating window is tiled again with `toggle`, the size it had while floating
+replaces that size, so the next float gives back the size the user last chose. A window floated by
+a drag keeps the size the user gave it. A maximized managed window keeps its place in the stack
+but takes no slot.
 
 A `tile` rule manages a window that has no `WS_THICKFRAME` or no `WS_CAPTION` (a game with a
 fixed-size or frameless window). It lifts those two checks only: a fullscreen, maximized, tool or

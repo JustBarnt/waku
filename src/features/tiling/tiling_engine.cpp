@@ -26,6 +26,19 @@ bool differs(const QRect& a, const QRect& b) {
          std::abs(a.height() - b.height()) > kMovedTolerance;
 }
 
+// Where a window that is floated out of its tile goes: the size it had before the tiler first
+// placed it, centred on the tile it leaves, inside the work area. A launch size larger than the
+// work area is cut to it.
+QRect floatedRect(const QRect& launch, const QRect& tile, const QRect& area) {
+  QRect rect(QPoint(), launch.size());
+  if (!area.isEmpty()) rect.setSize(rect.size().boundedTo(area.size()));
+  rect.moveCenter(tile.center());
+  if (area.isEmpty()) return rect;
+  rect.moveLeft(std::clamp(rect.left(), area.left(), area.right() - rect.width() + 1));
+  rect.moveTop(std::clamp(rect.top(), area.top(), area.bottom() - rect.height() + 1));
+  return rect;
+}
+
 class QtScheduler final : public Scheduler {
  public:
   void after(int ms, std::function<void()> task) override {
@@ -84,6 +97,7 @@ void TilingEngine::stop() {
   restoreBeforeTile_.clear();
   moving_.clear();
   placed_.clear();
+  floatRects_.clear();
   resizeDrags_.clear();
   clamped_.clear();
   wasTop_.clear();
@@ -419,6 +433,8 @@ void TilingEngine::evaluate(WindowId hwnd, int attempt, bool force, bool initial
 void TilingEngine::forget(WindowId hwnd, bool dropFloat) {
   restoreBeforeTile_.erase(hwnd);
   placed_.erase(hwnd);
+  // dropFloat: the window is gone, not just out of the layout for now.
+  if (dropFloat) floatRects_.erase(hwnd);
   clamped_.erase(hwnd);
   moving_.erase(hwnd);
   resizeDrags_.erase(hwnd);
@@ -517,6 +533,9 @@ void TilingEngine::retile(const WorkspaceKey& key) {
       restoreBeforeTile_.erase(hwnd);
       if (facts->fullscreen) continue;
       current[hwnd] = facts->rect;
+      // The first time the tiler is about to place it: remember the size the window chose. A later
+      // float-to-tile updates it (setForegroundFloating).
+      floatRects_.emplace(hwnd, facts->rect);
       if (hwnd == slot.topWindow()) {
         active.push_back(hwnd);
         topActive = true;
@@ -648,6 +667,14 @@ FloatOutcome TilingEngine::setForegroundFloating(std::optional<bool> floating) {
     const std::optional<WorkspaceKey> key = model_.keyOf(hwnd);
     model_.setFloating(hwnd, true);
     placed_.erase(hwnd);
+    // Give the window back the size it had before it was tiled, centred where its tile was, so a
+    // float does not leave it at the size of a slot it no longer has.
+    const auto launch = floatRects_.find(hwnd);
+    if (launch != floatRects_.end() && facts && !facts->iconic && !facts->zoomed &&
+        !facts->fullscreen) {
+      const QRect area = placer_.workArea(facts->monitor);
+      placer_.place(hwnd, floatedRect(launch->second, facts->rect, area));
+    }
     if (key) requestRetile(*key);
     return FloatOutcome::Floated;
   }
@@ -656,6 +683,11 @@ FloatOutcome TilingEngine::setForegroundFloating(std::optional<bool> floating) {
     restoreBeforeTile_.insert(hwnd);
     if (const auto key = model_.keyOf(hwnd)) requestRetile(*key);
     return FloatOutcome::Tiled;
+  }
+  // A floating window goes back into a tile: the size the user gave it while it floated is the one
+  // the next float gives back.
+  if (facts && !facts->iconic && !facts->zoomed && !facts->fullscreen && !facts->rect.isEmpty()) {
+    floatRects_[hwnd] = facts->rect;
   }
   pending_.erase(hwnd);
   evaluate(hwnd, 0, true);

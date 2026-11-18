@@ -917,6 +917,69 @@ TEST(TilingEngine, ToggleFloatFloatsAndTilesTheForegroundWindow) {
   EXPECT_EQ(rig.placer.lastSlot(1), rig.slot(2, 3));  // appended at the end
 }
 
+TEST(TilingEngine, FloatingATiledWindowGivesBackItsLaunchSize) {
+  Rig rig;
+  rig.engine.start();
+  rig.placer.add(1).rect = QRect(300, 200, 800, 600);  // the size the app opened with
+  rig.send(EventKind::Show, 1);
+  rig.settle();
+  rig.open(2);
+  const QRect tile = rig.slot(0, 2);
+  ASSERT_EQ(rig.placer.lastSlot(1), tile);
+  rig.placer.front = 1;
+  ASSERT_EQ(rig.engine.setForegroundFloating(std::nullopt), FloatOutcome::Floated);
+  rig.settle();
+  const QRect floated = rig.placer.lastSlot(1);
+  EXPECT_EQ(floated.size(), QSize(800, 600));
+  EXPECT_EQ(floated.center(), tile.center());
+  EXPECT_EQ(rig.placer.lastSlot(2), rig.slot(0, 1));  // the other fills the area
+  // Tiling it again and floating it again gives the launch size, not the last tile's.
+  ASSERT_EQ(rig.engine.setForegroundFloating(std::nullopt), FloatOutcome::Tiled);
+  rig.settle();
+  ASSERT_EQ(rig.engine.setForegroundFloating(true), FloatOutcome::Floated);
+  rig.settle();
+  EXPECT_EQ(rig.placer.lastSlot(1).size(), QSize(800, 600));
+}
+
+TEST(TilingEngine, FloatingAgainGivesBackTheSizeItHadWhileFloating) {
+  Rig rig;
+  rig.engine.start();
+  rig.placer.add(1).rect = QRect(300, 200, 800, 600);
+  rig.send(EventKind::Show, 1);
+  rig.settle();
+  rig.open(2);
+  rig.placer.front = 1;
+  ASSERT_EQ(rig.engine.setForegroundFloating(true), FloatOutcome::Floated);
+  rig.settle();
+  rig.placer.windows[1].rect = QRect(200, 150, 1200, 700);  // the user resized it while floating
+  ASSERT_EQ(rig.engine.setForegroundFloating(std::nullopt), FloatOutcome::Tiled);
+  rig.settle();
+  ASSERT_NE(rig.placer.windows[1].rect.size(), QSize(1200, 700));  // tiled again
+  ASSERT_EQ(rig.engine.setForegroundFloating(true), FloatOutcome::Floated);
+  rig.settle();
+  EXPECT_EQ(rig.placer.lastSlot(1).size(), QSize(1200, 700));
+}
+
+TEST(TilingEngine, AFloatedLaunchSizeStaysInsideTheWorkArea) {
+  Rig rig;
+  rig.engine.start();
+  rig.placer.add(1).rect = QRect(0, 0, 2400, 1200);  // larger than the 1920x1040 work area
+  rig.send(EventKind::Show, 1);
+  rig.settle();
+  rig.open(2);
+  rig.placer.front = 2;  // the stack slot, at the right edge
+  ASSERT_EQ(rig.engine.setForegroundFloating(true), FloatOutcome::Floated);
+  rig.settle();
+  rig.placer.front = 1;
+  ASSERT_EQ(rig.engine.setForegroundFloating(true), FloatOutcome::Floated);
+  rig.settle();
+  EXPECT_TRUE(kAreaA.contains(rig.placer.lastSlot(1)));
+  EXPECT_EQ(rig.placer.lastSlot(1).size(), kAreaA.size());
+  // A window that opened smaller than its tile, in the stack at the right edge, stays on screen.
+  EXPECT_TRUE(kAreaA.contains(rig.placer.lastSlot(2)));
+  EXPECT_EQ(rig.placer.lastSlot(2).size(), QSize(640, 480));
+}
+
 TEST(TilingEngine, ToggleFloatWithoutAForegroundWindowDoesNothing) {
   Rig rig;
   rig.engine.start();

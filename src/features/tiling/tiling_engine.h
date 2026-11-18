@@ -203,6 +203,11 @@ class TilingEngine {
   std::set<WindowId> restoreBeforeTile_;
   std::set<WindowId> moving_;         // the user drags or resizes it
   std::map<WindowId, QRect> placed_;  // the visible bounds the window had when we last looked
+  // The size a window gets back when toggle or float takes it out of the layout: the visible bounds
+  // it had before the tiler first placed it (its launch size, or its size when waku started), then,
+  // each time it goes from floating back to tiled, the size it had while floating. Kept while the
+  // window lives, through floats, minimizes and desktop moves; dropped when it is destroyed.
+  std::map<WindowId, QRect> floatRects_;
   struct ResizeDrag {
     WorkspaceKey key;
     QRect startRect;
