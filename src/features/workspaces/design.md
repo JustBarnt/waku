@@ -67,10 +67,13 @@ callbacks are marshalled to it.
   desktop, now cloaked, which still takes the keyboard. After a switch through the shell interface
   (700 ms, or 100 ms unanimated) and after `move` sends the foreground window away (100 ms), a timer
   on the hidden anchor window gives the focus to the top window of the shown desktop, or to the
-  desktop itself when it has none, with `kernel::forceForegroundFocus` (a plain
-  `SetForegroundWindow` is refused: waku did not receive the last input). A visible, uncloaked
+  desktop itself when it has none. Windows lets a process take the foreground only if it received
+  the last input, and the key went to the hotkey tool, so each step runs only if the one before was
+  refused: `kernel::forceForegroundFocus`, then `SwitchToThisWindow`, then an empty mouse input
+  (`SendInput`, which moves and clicks nothing) and `SetForegroundWindow`. Verified on Windows 11:
+  the first switch of a run needed the last step, the later ones the first. A visible, uncloaked
   window of another process that already has the focus keeps it. A second switch before the timer
-  fires restarts it.
+  fires restarts it. Each focus logs one debug line (`virtual desktops: focus ...`).
 - **Monitors.** Desktops are not per monitor, so the model has one entry with handle 0 that every
   bar shows (`Workspaces.qml` accepts handle 0).
 - **Create.** `switchTo` with the index just past the last desktop (below 20) creates the next

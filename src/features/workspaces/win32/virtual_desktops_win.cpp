@@ -87,6 +87,21 @@ bool isCloaked(HWND hwnd) {
          cloaked != 0;
 }
 
+// "<class> pid=<pid> visible=<0|1> cloaked=<0|1> iconic=<0|1>" for the focus log line.
+QString describeWindow(HWND hwnd) {
+  if (!hwnd) return QStringLiteral("none");
+  wchar_t cls[64] = {};
+  GetClassNameW(hwnd, cls, 64);
+  DWORD pid = 0;
+  GetWindowThreadProcessId(hwnd, &pid);
+  return QStringLiteral("%1 pid=%2 visible=%3 cloaked=%4 iconic=%5")
+      .arg(QString::fromWCharArray(cls))
+      .arg(pid)
+      .arg(IsWindowVisible(hwnd) ? 1 : 0)
+      .arg(isCloaked(hwnd) ? 1 : 0)
+      .arg(IsIconic(hwnd) ? 1 : 0);
+}
+
 // Whether the foreground window is one the user can see and type into on the shown desktop. After
 // a switch through the shell interface Windows leaves the focus where it was: on a window of the
 // previous desktop, now cloaked, which still takes the keyboard. A window of waku (a bar that was
@@ -109,7 +124,11 @@ bool foregroundIsSettled() {
 // without windows gives it to the desktop itself, so the keyboard never stays on a hidden window.
 // A window Windows already focused on the shown desktop keeps it.
 void focusTopWindow() {
-  if (foregroundIsSettled()) return;
+  const HWND before = GetForegroundWindow();
+  if (foregroundIsSettled()) {
+    qDebug().noquote() << "virtual desktops: focus kept on" << describeWindow(before);
+    return;
+  }
   struct Found {
     HWND hwnd = nullptr;
   } found;
@@ -125,9 +144,32 @@ void focusTopWindow() {
         return FALSE;
       },
       reinterpret_cast<LPARAM>(&found));
-  // SetForegroundWindow alone is refused: waku did not receive the last input.
   const HWND target = found.hwnd ? found.hwnd : GetShellWindow();
-  if (target) kernel::forceForegroundFocus(reinterpret_cast<std::uintptr_t>(target));
+  if (!target) return;
+  // Windows lets a process take the foreground only if it received the last input, and the key
+  // went to the hotkey tool, not to waku. Verified on Windows 11: forceForegroundFocus (attach to
+  // the foreground thread) is refused here. SwitchToThisWindow is the call Alt+Tab uses and the
+  // anchor jump's fallback; an empty mouse input makes waku the receiver of the last input, which
+  // lifts the lock for the SetForegroundWindow after it. The input moves and clicks nothing.
+  const char* how = "forceForegroundFocus";
+  kernel::forceForegroundFocus(reinterpret_cast<std::uintptr_t>(target));
+  if (GetForegroundWindow() != target) {
+    how = "SwitchToThisWindow";
+    SwitchToThisWindow(target, TRUE);
+  }
+  if (GetForegroundWindow() != target) {
+    how = "input + SetForegroundWindow";
+    INPUT input = {};
+    input.type = INPUT_MOUSE;
+    SendInput(1, &input, sizeof(input));
+    SetForegroundWindow(target);
+  }
+  const HWND after = GetForegroundWindow();
+  const QString result = after == target
+                             ? QStringLiteral("(ok, %1)").arg(QLatin1String(how))
+                             : QStringLiteral("(refused, now %1)").arg(describeWindow(after));
+  qDebug().noquote() << "virtual desktops: focus from" << describeWindow(before) << "to"
+                     << describeWindow(target) << result;
 }
 
 LRESULT CALLBACK anchorProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -160,6 +202,9 @@ class Win32VirtualDesktopSystem final : public VirtualDesktopSystem {
       if (index >= ids.size()) ids = api->desktopIds().value_or(ids);
       const bool known = index >= 0 && index < ids.size();
       if (known && api->switchTo(ids.at(index), animate_)) {
+        qDebug().noquote() << "virtual desktops: switched to" << index
+                           << "through the shell; focus in" << (animate_ ? kHideAfterMs : kSettleMs)
+                           << "ms";
         // The shell switches but does not move the focus: give it to the shown desktop once the
         // switch is over.
         scheduleFocus(animate_ ? kHideAfterMs : kSettleMs);
@@ -296,6 +341,7 @@ class Win32VirtualDesktopSystem final : public VirtualDesktopSystem {
     // The window stays until the animation is over, then goes away (and with it any entry the
     // taskbar list made for it).
     SetTimer(anchor_, kHideTimer, kHideAfterMs, nullptr);
+    qDebug().noquote() << "virtual desktops: switched to" << index << "through the anchor window";
     return true;
   }
 
@@ -346,8 +392,13 @@ class Win32VirtualDesktopSystem final : public VirtualDesktopSystem {
   // Runs focusTopWindow on the anchor's timer after `delayMs`; a later call restarts it, so a
   // quick second switch focuses once, at its own end. The anchor stays hidden.
   void scheduleFocus(UINT delayMs) {
-    if (!anchor_ && !createAnchor()) return;
-    SetTimer(anchor_, kFocusTimer, delayMs, nullptr);
+    if (!anchor_ && !createAnchor()) {
+      qDebug() << "virtual desktops: no anchor window, focus not scheduled";
+      return;
+    }
+    if (SetTimer(anchor_, kFocusTimer, delayMs, nullptr) == 0) {
+      qDebug() << "virtual desktops: SetTimer failed, error" << GetLastError();
+    }
   }
 
   enum class ApiState { Untried, Open, Lost, Unavailable };
