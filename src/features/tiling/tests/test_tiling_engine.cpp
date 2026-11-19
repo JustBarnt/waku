@@ -834,9 +834,34 @@ TEST(TilingEngine, AWindowThatPutsBackItsSavedSizeOverThePlacementIsPlacedAgain)
   };
   rig.placer.add(1);
   rig.send(EventKind::Show, 1);
-  rig.scheduler.advance(TilingEngine::kVerifyMs * 3);
+  rig.scheduler.advance(TilingEngine::kSettleQuietMs + TilingEngine::kVerifyMs * 3);
   EXPECT_EQ(rig.placer.windows[1].rect, rig.slot(0, 1));
   EXPECT_EQ(rig.placer.slotsOf(1).size(), 2u);
+  EXPECT_EQ(rig.engine.status().clamped, 0);
+}
+
+TEST(TilingEngine, AWindowThatRestoresItsBoundsInStepsIsPlacedAgainAfterTheLastOne) {
+  Rig rig;
+  rig.engine.start();
+  // As Zen did: after the placement it puts back its saved position, then, 300 ms later, its
+  // saved width. A placement between the two would be undone by the second.
+  int placements = 0;
+  rig.placer.onPlace = [&](WindowId hwnd, const QRect& slot) {
+    if (++placements != 1) return;
+    rig.scheduler.after(100, [&rig, hwnd, slot] {
+      rig.placer.windows[hwnd].rect = QRect(slot.x(), slot.y() - 8, slot.width(), slot.height());
+      rig.send(EventKind::LocationChange, hwnd);
+    });
+    rig.scheduler.after(400, [&rig, hwnd, slot] {
+      rig.placer.windows[hwnd].rect = QRect(slot.x(), slot.y() - 8, 955, slot.height());
+      rig.send(EventKind::LocationChange, hwnd);
+    });
+  };
+  rig.placer.add(1);
+  rig.send(EventKind::Show, 1);
+  rig.scheduler.advance(1500);
+  EXPECT_EQ(rig.placer.windows[1].rect, rig.slot(0, 1));
+  EXPECT_EQ(rig.placer.slotsOf(1).size(), 2u);  // the first, and one after the last step
   EXPECT_EQ(rig.engine.status().clamped, 0);
 }
 
@@ -849,7 +874,7 @@ TEST(TilingEngine, AWindowThatResizesItselfSoonAfterItsReadbackIsPlacedAgain) {
   ASSERT_EQ(rig.placer.windows[1].rect, rig.slot(0, 1));
   rig.placer.windows[1].rect = QRect(0, 0, 955, 1040);
   rig.send(EventKind::LocationChange, 1);
-  rig.scheduler.advance(TilingEngine::kVerifyMs + 50);
+  rig.scheduler.advance(TilingEngine::kSettleQuietMs + TilingEngine::kVerifyMs + 50);
   EXPECT_EQ(rig.placer.windows[1].rect, rig.slot(0, 1));
   EXPECT_EQ(rig.placer.slotsOf(1).size(), 2u);
 }

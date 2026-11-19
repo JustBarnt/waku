@@ -71,9 +71,11 @@ enum class FloatOutcome { NoWindow, Floated, Tiled, Unchanged, Ineligible };
 // Startup restores eligible maximized windows before tiling them; later maximization is respected.
 // It never activates a window, never places a cloaked, minimized, maximized or fullscreen one, and
 // reads the rectangle back after a placement: a window that clamps (minimum size) keeps its slot
-// and leaves a gap. Only a window the engine has just started managing is placed again, at most
-// kSettlePlacements times within kSettleMs: an application that puts back the size it saved when
-// it last closed does so right after it shows, over the tiler's placement.
+// and leaves a gap. Only a window the engine has just started managing is placed again: an
+// application that puts back the bounds it saved when it last closed does so after it shows, over
+// the tiler's placement, sometimes in steps (a browser: the position, then the size). Within
+// kSettleMs, each change it makes restarts a kSettleQuietMs wait; when the wait runs out it is
+// placed again, kSettlePlacements times at most.
 class TilingEngine {
  public:
   static constexpr int kRetryMs = 100;
@@ -81,12 +83,13 @@ class TilingEngine {
   // How long after a placement the engine reads the window's bounds back: SetWindowPos is posted,
   // so the window applies it a moment later.
   static constexpr int kVerifyMs = 150;
-  // A newly managed window whose bounds move away from its slot within this time, by itself, is
-  // placed again, this many times at most; later changes are its own.
-  // Long enough for a browser's session restore, which sets the saved size seconds after the
+  // A newly managed window that moves off its slot by itself within kSettleMs is placed again
+  // once it has made no change for kSettleQuietMs, kSettlePlacements times at most; later changes
+  // are its own. kSettleMs covers a browser's session restore, which can come seconds after the
   // window shows.
   static constexpr int kSettleMs = 10000;
-  static constexpr int kSettlePlacements = 2;
+  static constexpr int kSettleQuietMs = 300;
+  static constexpr int kSettlePlacements = 3;
 
   TilingEngine(WindowPlacer& placer, Scheduler& scheduler);
   ~TilingEngine();
@@ -184,6 +187,9 @@ class TilingEngine {
   void verifyPlacements(const std::vector<std::pair<WindowId, QRect>>& placed);
   // Starts the settling period of a window the engine has just started managing.
   void startSettling(WindowId hwnd);
+  // When `hwnd` is settling and has placements left: (re)starts its quiet wait, at the end of which
+  // it is placed again, and returns true. `why` is for the debug line.
+  bool settleLater(WindowId hwnd, const WindowFacts& facts, const QString& why);
   WorkspaceKey keyFor(const WindowFacts& facts) const;
   std::optional<WorkspaceKey> foregroundKey() const;
   struct Focused {
@@ -233,9 +239,15 @@ class TilingEngine {
   };
   std::map<WindowId, ResizeDrag> resizeDrags_;
   std::set<WindowId> clamped_;  // placed, but not at the size of its slot
-  // Newly managed windows: the placements left to undo a change of their own bounds, and the
-  // serial of their settling period (a later period of the same window outlives this one's timer).
-  std::map<WindowId, std::pair<int, unsigned>> settling_;
+  // Newly managed windows: the placements left to undo a change of their own bounds, the serial of
+  // the settling period (a later period of the same window outlives this one's timer) and of the
+  // quiet wait now running (a newer change makes the older wait do nothing).
+  struct Settling {
+    int left = kSettlePlacements;
+    unsigned period = 0;
+    unsigned quiet = 0;
+  };
+  std::map<WindowId, Settling> settling_;
   unsigned settleSerial_ = 0;
   // Placed, and the readback has not run yet: the bounds seen until then can be stale.
   std::set<WindowId> verifying_;

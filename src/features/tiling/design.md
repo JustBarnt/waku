@@ -105,9 +105,12 @@ be stale: 150 ms later the engine reads the bounds again. A window that clamps (
 keeps its slot, leaves a gap and is counted in `status`. The one exception is a window the engine
 has just started managing: an application that saved its size when it last closed (half the
 width, next to another tile) puts it back after it shows, over the placement; a browser's session
-restore does it seconds later. For 10 s (`kSettleMs`) such a window is placed again when the readback or a later location event finds it
-off its slot, twice at most (`kSettlePlacements`); a real clamp costs those two extra calls and is
-then left alone. Changes after that are the window's own. With `--log-file`, every decision is a
+restore does it seconds later, and in steps (Zen: its saved position, then 300 ms later its saved
+width). For 10 s (`kSettleMs`), a readback or a location event that finds such a window off its
+slot starts a 300 ms wait (`kSettleQuietMs`) that each further change restarts; when it runs out
+the window is placed again, three times at most (`kSettlePlacements`). Placing again at once lost
+to Zen: the corrections landed between its steps. A real clamp costs the three extra placements and
+is then left alone. Changes after the period are the window's own. With `--log-file`, every decision is a
 debug line starting `tiling:` (manage, float, ignore with its reason, place, readback, a window
 that moved itself), naming the window by handle, process and class, never by title. The slot is the
 visible bounds; `outerRect` adds the invisible border per edge (`GetWindowRect` minus

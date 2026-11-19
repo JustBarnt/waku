@@ -659,7 +659,6 @@ void TilingEngine::raiseNewTops(const WorkspaceKey& key, const std::vector<Windo
 }
 
 void TilingEngine::verifyPlacements(const std::vector<std::pair<WindowId, QRect>>& placed) {
-  std::vector<std::pair<WindowId, QRect>> again;
   for (const auto& [hwnd, slot] : placed) {
     verifying_.erase(hwnd);
     if (!model_.contains(hwnd) || moving_.count(hwnd)) continue;
@@ -670,44 +669,47 @@ void TilingEngine::verifyPlacements(const std::vector<std::pair<WindowId, QRect>
       clamped_.erase(hwnd);
       continue;
     }
-    // A window the engine has just started managing may have put back the size it saved over the
-    // placement: place it again, a bounded number of times. Otherwise (or once those are spent) a
-    // window that cannot take its slot keeps what it took.
-    const auto settling = settling_.find(hwnd);
-    if (!paused_ && settling != settling_.end() && settling->second.first > 0 &&
-        !facts->iconic && !facts->zoomed && !facts->fullscreen && !facts->cloaked) {
-      --settling->second.first;
-      qDebug().noquote() << "tiling: readback" << describe(hwnd, &*facts) << "found"
-                         << rectText(facts->rect) << "instead of" << rectText(slot)
-                         << "- placing again";
-      again.emplace_back(hwnd, slot);
-      continue;
-    }
-    qDebug().noquote() << "tiling: readback" << describe(hwnd, &*facts) << "found"
-                       << rectText(facts->rect) << "instead of" << rectText(slot)
-                       << "- clamped, left there";
+    const QString found = QStringLiteral("readback found %1 instead of %2")
+                              .arg(rectText(facts->rect), rectText(slot));
+    // A window the engine has just started managing may be putting back the bounds it saved.
+    if (settleLater(hwnd, *facts, found)) continue;
+    // Otherwise (or once its placements are spent) a window that cannot take its slot keeps what
+    // it took.
+    qDebug().noquote() << "tiling:" << describe(hwnd, &*facts) << found << "- clamped, left there";
     clamped_.insert(hwnd);
   }
-  for (const auto& [hwnd, slot] : again) {
-    verifying_.insert(hwnd);
-    const PlaceResult result = placer_.place(hwnd, slot);
-    if (!result.ok) {
-      forget(hwnd, false);
-      ignored_[hwnd] = Ignored::Lasting;
-      continue;
-    }
-    placed_[hwnd] = result.achieved;
-  }
-  if (!again.empty()) defer(kVerifyMs, [this, again] { verifyPlacements(again); });
 }
 
 void TilingEngine::startSettling(WindowId hwnd) {
-  const unsigned serial = ++settleSerial_;
-  settling_[hwnd] = {kSettlePlacements, serial};
-  defer(kSettleMs, [this, hwnd, serial] {
+  const unsigned period = ++settleSerial_;
+  settling_[hwnd] = Settling{kSettlePlacements, period, 0};
+  defer(kSettleMs, [this, hwnd, period] {
     const auto found = settling_.find(hwnd);
-    if (found != settling_.end() && found->second.second == serial) settling_.erase(found);
+    if (found != settling_.end() && found->second.period == period) settling_.erase(found);
   });
+}
+
+bool TilingEngine::settleLater(WindowId hwnd, const WindowFacts& facts, const QString& why) {
+  const auto settling = settling_.find(hwnd);
+  if (paused_ || settling == settling_.end() || settling->second.left <= 0) return false;
+  if (facts.iconic || facts.zoomed || facts.fullscreen || facts.cloaked) return false;
+  // The window may not be done: wait until it has been quiet, so the placement comes after its
+  // last step instead of between two of them.
+  const unsigned quiet = ++settleSerial_;
+  settling->second.quiet = quiet;
+  qDebug().noquote() << "tiling:" << describe(hwnd, &facts) << why
+                     << "- placing again once it is quiet";
+  defer(kSettleQuietMs, [this, hwnd, quiet] {
+    const auto found = settling_.find(hwnd);
+    if (!running_ || found == settling_.end() || found->second.quiet != quiet ||
+        found->second.left <= 0) {
+      return;
+    }
+    --found->second.left;
+    clamped_.erase(hwnd);
+    if (const auto key = model_.keyOf(hwnd)) requestRetile(*key);
+  });
+  return true;
 }
 
 void TilingEngine::onSettlingMove(WindowId hwnd) {
@@ -719,20 +721,12 @@ void TilingEngine::onSettlingMove(WindowId hwnd) {
   const std::optional<WindowFacts> facts = placer_.state(hwnd);
   if (!facts || facts->iconic || facts->zoomed || facts->fullscreen || facts->cloaked) return;
   if (!differs(placed->second, facts->rect)) return;
-  const auto settling = settling_.find(hwnd);
-  if (settling == settling_.end() || settling->second.first <= 0) {
-    // Its own change, after the settling period or once its placements are spent: it stays. Noted
-    // once per change, so the log shows why a tiled window is off its slot.
-    qDebug().noquote() << "tiling:" << describe(hwnd, &*facts) << "moved itself to"
-                       << rectText(facts->rect) << "- left there";
-    placed->second = facts->rect;
-    return;
-  }
-  qDebug().noquote() << "tiling:" << describe(hwnd, &*facts) << "moved itself to"
-                     << rectText(facts->rect) << "while settling - placing again";
-  --settling->second.first;
-  clamped_.erase(hwnd);
-  if (const auto key = model_.keyOf(hwnd)) requestRetile(*key);
+  // Noted once per change: the next event of the same bounds finds nothing new.
+  placed->second = facts->rect;
+  const QString moved = QStringLiteral("moved itself to %1").arg(rectText(facts->rect));
+  if (settleLater(hwnd, *facts, moved)) return;
+  // Its own change, after the settling period or once its placements are spent: it stays.
+  qDebug().noquote() << "tiling:" << describe(hwnd, &*facts) << moved << "- left there";
 }
 
 std::vector<QRect> TilingEngine::slotsFor(const WorkspaceKey& key, const QRect& area,
