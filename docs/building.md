@@ -35,17 +35,29 @@ vcpkg builds its packages with the newest MSVC toolset it finds, not necessarily
 `vcvarsall` selected for waku. With Visual Studio 2026 (MSVC 14.5x) installed next to the 2022
 Build Tools (14.44), the packages come out of 14.5x and linking `waku_tests` fails with unresolved
 STL symbols such as `__std_rotate` (LNK2001). `cmake\triplets\x64-windows-static-md.cmake` is the
-stock triplet pinned to v143 / 14.44. Point vcpkg at it with `VCPKG_OVERLAY_TRIPLETS`, set after
-`vcvarsall` like `VCPKG_ROOT`, from the repository root:
+stock triplet pinned to v143 / 14.44. Point vcpkg at it with the `VCPKG_OVERLAY_TRIPLETS` CMake
+variable when you configure:
 
 ```powershell
-cmd /c "call `"$vc`" x64 && set VCPKG_ROOT=C:\vcpkg&& set VCPKG_OVERLAY_TRIPLETS=%CD%\cmake\triplets&& cmake --preset x64-release && cmake --build --preset x64-release && ctest --preset x64-release -j"
+cmd /c "call `"$vc`" x64 && set VCPKG_ROOT=C:\vcpkg&& cmake --preset x64-release -DVCPKG_OVERLAY_TRIPLETS=%CD%\cmake\triplets && cmake --build --preset x64-release && ctest --preset x64-release -j"
 ```
 
+Pass it as `-D`, not only as an environment variable. vcpkg installs the packages during the
+configure step, and the cache keeps the value for every later configure of that build folder, from
+any shell or an IDE such as CLion. An environment variable only counts in the shell that has it:
+a configure from anywhere else silently uses the stock triplet again. vcpkg also reuses packages
+from its binary cache, so the failure shows up only at the link.
+
+To check, open `build\<preset>\vcpkg-manifest-install.log` after the configure: the
+`Compiler found:` line for `x64-windows-static-md` must name `MSVC\14.44...`. When it names
+14.5x the overlay was not used. A change of the overlay changes the packages' ABI hash, so the next
+configure rebuilds them (or restores a matching build from the binary cache); there is nothing to
+delete.
+
 The overlay must keep the triplet's name, so it replaces `x64-windows-static-md` instead of adding
-a new triplet. With another 2022 toolset, set `VCPKG_PLATFORM_TOOLSET_VERSION` in it to the first two
-parts of `%VCToolsVersion%` after `vcvarsall` (14.44 for 14.44.35207). Delete `build\<preset>\vcpkg_installed` after changing the
-overlay so the packages are built again. With a single toolset installed, leave the variable unset.
+a new triplet. With another 2022 toolset, set `VCPKG_PLATFORM_TOOLSET_VERSION` in it to the first
+two parts of `%VCToolsVersion%` after `vcvarsall` (14.44 for 14.44.35207). With a single toolset
+installed, leave the variable unset.
 
 Everything lands in `build\<preset>`: `waku.exe`, `wakuc.exe`, `wakukeys.exe` and
 `waku_tests.exe` with the Qt DLLs and the offscreen platform plugin that `windeployqt` copies next
