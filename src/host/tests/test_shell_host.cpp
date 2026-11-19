@@ -274,6 +274,7 @@ ShellRoot {
   QSignalSpy changes(panel, &PanelWindow::screenFullscreenChanged);
   h.native.fullscreenPanels.insert(static_cast<quintptr>(panel->backingWindow()->winId()));
   QTRY_VERIFY_WITH_TIMEOUT(panel->screenFullscreen(), 2000);
+  EXPECT_FALSE(panel->screenMaximized());  // a fullscreen application, not a maximized one
   EXPECT_TRUE(panel->property("shellFullscreen").toBool());
   EXPECT_FALSE(bar->isVisible());
   EXPECT_TRUE(panel->backingWindowVisible());
@@ -376,10 +377,12 @@ TEST(ShellHostTest, MaximizationAutoHidesAndReleasesSpaceOnlyWhenEnabled) {
   h.native.maximizedPanels.insert(hwnd);
   QTRY_VERIFY_WITH_TIMEOUT(!panel->backingWindowVisible(), 2000);
   EXPECT_TRUE(panel->screenFullscreen());
+  EXPECT_TRUE(panel->screenMaximized());
   EXPECT_FALSE(h.native.created.back().request.reserveSpace);
 
   h.native.maximizedPanels.clear();
   QTRY_VERIFY_WITH_TIMEOUT(panel->backingWindowVisible(), 2000);
+  EXPECT_FALSE(panel->screenMaximized());
   EXPECT_TRUE(h.native.created.back().request.reserveSpace);
 }
 

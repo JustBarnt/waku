@@ -52,7 +52,9 @@ are needed.
 
 For shells that draw a bar inside a full-screen overlay, `PanelWindow.screenFullscreen` is a
 read-only waku extension. It reports a fullscreen or maximized application on that window's
-monitor and current desktop, regardless of the panel's anchors, layer or visibility. Bind the
+monitor and current desktop, regardless of the panel's anchors, layer or visibility.
+`PanelWindow.screenMaximized` is true when that application is maximized rather than fullscreen,
+so a shell can hide its bar only for fullscreen (`screenFullscreen && !screenMaximized`). Bind the
 bar's content and input regions to this state; the host does not hide an entire full-screen
 overlay because it can also contain notifications and other panels. Such shells handle their
 own edge reveal. Ordinary docked panels get automatic hiding and reveal from the host.

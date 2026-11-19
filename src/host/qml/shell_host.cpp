@@ -877,7 +877,8 @@ void ShellHost::updateFullscreenPanel(Entry& entry) {
       hooks.screenOccupancyOnMonitor
           ? hooks.screenOccupancyOnMonitor(static_cast<quintptr>(panel->backingWindow()->winId()))
           : ScreenOccupancy::None;
-  panel->setScreenFullscreen(occupancy != ScreenOccupancy::None);
+  panel->setScreenOccupancy(occupancy != ScreenOccupancy::None,
+                            occupancy == ScreenOccupancy::Maximized);
   if (!entry.live()) return;
   const bool hideForMaximization = occupancy == ScreenOccupancy::Maximized &&
                                    options_.maximizedAutoHideEnabled &&

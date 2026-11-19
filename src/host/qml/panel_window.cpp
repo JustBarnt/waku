@@ -96,10 +96,14 @@ void PanelWindow::setLayerNamespace(const QString& name) {
   emit layerNamespaceChanged();
 }
 
-void PanelWindow::setScreenFullscreen(bool fullscreen) {
-  if (screenFullscreen_ == fullscreen) return;
+void PanelWindow::setScreenOccupancy(bool fullscreen, bool maximized) {
+  maximized = fullscreen && maximized;
+  const bool fullscreenChanged = screenFullscreen_ != fullscreen;
+  const bool maximizedChanged = screenMaximized_ != maximized;
   screenFullscreen_ = fullscreen;
-  emit screenFullscreenChanged();
+  screenMaximized_ = maximized;
+  if (fullscreenChanged) emit screenFullscreenChanged();
+  if (maximizedChanged) emit screenMaximizedChanged();
 }
 
 QRect PanelWindow::geometryOn(const QRect& screen) const {
