@@ -71,7 +71,9 @@ enum class FloatOutcome { NoWindow, Floated, Tiled, Unchanged, Ineligible };
 // Startup restores eligible maximized windows before tiling them; later maximization is respected.
 // It never activates a window, never places a cloaked, minimized, maximized or fullscreen one, and
 // reads the rectangle back after a placement: a window that clamps (minimum size) keeps its slot
-// and leaves a gap; there is no second pass.
+// and leaves a gap. Only a window the engine has just started managing is placed again, at most
+// kSettlePlacements times within kSettleMs: an application that puts back the size it saved when
+// it last closed does so right after it shows, over the tiler's placement.
 class TilingEngine {
  public:
   static constexpr int kRetryMs = 100;
@@ -79,6 +81,10 @@ class TilingEngine {
   // How long after a placement the engine reads the window's bounds back: SetWindowPos is posted,
   // so the window applies it a moment later.
   static constexpr int kVerifyMs = 150;
+  // A newly managed window whose bounds move away from its slot within this time, by itself, is
+  // placed again, this many times at most; later changes are its own.
+  static constexpr int kSettleMs = 2000;
+  static constexpr int kSettlePlacements = 2;
 
   TilingEngine(WindowPlacer& placer, Scheduler& scheduler);
   ~TilingEngine();
@@ -170,8 +176,12 @@ class TilingEngine {
   void onMoveSizeStart(WindowId hwnd);
   void onMoveSizeEnd(WindowId hwnd);
   void onLocationChange(WindowId hwnd);
+  // A newly managed window that moved by itself after its placement goes back to its slot.
+  void onSettlingMove(WindowId hwnd);
   void raiseNewTops(const WorkspaceKey& key, const std::vector<WindowId>& active);
   void verifyPlacements(const std::vector<std::pair<WindowId, QRect>>& placed);
+  // Starts the settling period of a window the engine has just started managing.
+  void startSettling(WindowId hwnd);
   WorkspaceKey keyFor(const WindowFacts& facts) const;
   std::optional<WorkspaceKey> foregroundKey() const;
   struct Focused {
@@ -221,6 +231,12 @@ class TilingEngine {
   };
   std::map<WindowId, ResizeDrag> resizeDrags_;
   std::set<WindowId> clamped_;  // placed, but not at the size of its slot
+  // Newly managed windows: the placements left to undo a change of their own bounds, and the
+  // serial of their settling period (a later period of the same window outlives this one's timer).
+  std::map<WindowId, std::pair<int, unsigned>> settling_;
+  unsigned settleSerial_ = 0;
+  // Placed, and the readback has not run yet: the bounds seen until then can be stale.
+  std::set<WindowId> verifying_;
   std::set<WindowId> wasTop_;   // tops of stacks (two windows or more) at the last retile
   std::set<WorkspaceKey> retiles_;
   bool flushScheduled_ = false;

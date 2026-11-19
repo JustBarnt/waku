@@ -102,7 +102,12 @@ maximization, releases their work area, and restores their reservation once maxi
 ASYNCWINDOWPOS)` per window; not `DeferWindowPos`, which fails as a batch on one bad window. The
 async flag keeps a hung app from blocking the GUI thread, so the readback right after the call can
 be stale: 150 ms later the engine reads the bounds again. A window that clamps (a minimum size)
-keeps its slot, leaves a gap and is counted in `status`; there is no second pass. The slot is the
+keeps its slot, leaves a gap and is counted in `status`. The one exception is a window the engine
+has just started managing: an application that saved its size when it last closed (half the
+width, next to another tile) puts it back right after it shows, over the placement. For 2 s
+(`kSettleMs`) such a window is placed again when the readback or a later location event finds it
+off its slot, twice at most (`kSettlePlacements`); a real clamp costs those two extra calls and is
+then left alone. Changes after that are the window's own. The slot is the
 visible bounds; `outerRect` adds the invisible border per edge (`GetWindowRect` minus
 `DWMWA_EXTENDED_FRAME_BOUNDS`). The work area is `rcWork` of the window's monitor in physical
 pixels. A cloaked window is never placed. Retile requests are coalesced: any number in one turn

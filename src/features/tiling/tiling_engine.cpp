@@ -100,6 +100,8 @@ void TilingEngine::stop() {
   floatRects_.clear();
   resizeDrags_.clear();
   clamped_.clear();
+  settling_.clear();
+  verifying_.clear();
   wasTop_.clear();
   retiles_.clear();
   flushScheduled_ = false;
@@ -166,6 +168,7 @@ void TilingEngine::handle(const WindowEvent& event) {
       break;
     case EventKind::LocationChange:
       onLocationChange(hwnd);
+      onSettlingMove(hwnd);
       break;
     case EventKind::Foreground:
       refreshDesktop();
@@ -424,6 +427,7 @@ void TilingEngine::evaluate(WindowId hwnd, int attempt, bool force, bool initial
       ignored_.erase(hwnd);
       const WorkspaceKey key = keyFor(*facts);
       model_.add(key, hwnd);
+      startSettling(hwnd);
       requestRetile(key);
       break;
     }
@@ -436,6 +440,8 @@ void TilingEngine::forget(WindowId hwnd, bool dropFloat) {
   // dropFloat: the window is gone, not just out of the layout for now.
   if (dropFloat) floatRects_.erase(hwnd);
   clamped_.erase(hwnd);
+  settling_.erase(hwnd);
+  verifying_.erase(hwnd);
   moving_.erase(hwnd);
   resizeDrags_.erase(hwnd);
   wasTop_.erase(hwnd);
@@ -561,6 +567,8 @@ void TilingEngine::retile(const WorkspaceKey& key) {
       clamped_.erase(hwnd);
       return;
     }
+    // Before the call: the location event of this placement can arrive while it runs.
+    verifying_.insert(hwnd);
     const PlaceResult result = placer_.place(hwnd, slot);
     if (!result.ok) {
       // It refused (elevated, gone): leave it alone from now on.
@@ -619,18 +627,64 @@ void TilingEngine::raiseNewTops(const WorkspaceKey& key, const std::vector<Windo
 }
 
 void TilingEngine::verifyPlacements(const std::vector<std::pair<WindowId, QRect>>& placed) {
+  std::vector<std::pair<WindowId, QRect>> again;
   for (const auto& [hwnd, slot] : placed) {
+    verifying_.erase(hwnd);
     if (!model_.contains(hwnd) || moving_.count(hwnd)) continue;
     const std::optional<WindowFacts> facts = placer_.state(hwnd);
     if (!facts) continue;
     placed_[hwnd] = facts->rect;
-    // No second placement: a window that cannot take its slot keeps what it took.
-    if (differs(facts->rect, slot)) {
-      clamped_.insert(hwnd);
-    } else {
+    if (!differs(facts->rect, slot)) {
       clamped_.erase(hwnd);
+      continue;
     }
+    // A window the engine has just started managing may have put back the size it saved over the
+    // placement: place it again, a bounded number of times. Otherwise (or once those are spent) a
+    // window that cannot take its slot keeps what it took.
+    const auto settling = settling_.find(hwnd);
+    if (!paused_ && settling != settling_.end() && settling->second.first > 0 &&
+        !facts->iconic && !facts->zoomed && !facts->fullscreen && !facts->cloaked) {
+      --settling->second.first;
+      again.emplace_back(hwnd, slot);
+      continue;
+    }
+    clamped_.insert(hwnd);
   }
+  for (const auto& [hwnd, slot] : again) {
+    verifying_.insert(hwnd);
+    const PlaceResult result = placer_.place(hwnd, slot);
+    if (!result.ok) {
+      forget(hwnd, false);
+      ignored_[hwnd] = Ignored::Lasting;
+      continue;
+    }
+    placed_[hwnd] = result.achieved;
+  }
+  if (!again.empty()) defer(kVerifyMs, [this, again] { verifyPlacements(again); });
+}
+
+void TilingEngine::startSettling(WindowId hwnd) {
+  const unsigned serial = ++settleSerial_;
+  settling_[hwnd] = {kSettlePlacements, serial};
+  defer(kSettleMs, [this, hwnd, serial] {
+    const auto found = settling_.find(hwnd);
+    if (found != settling_.end() && found->second.second == serial) settling_.erase(found);
+  });
+}
+
+void TilingEngine::onSettlingMove(WindowId hwnd) {
+  const auto settling = settling_.find(hwnd);
+  if (!running_ || paused_ || settling == settling_.end() || settling->second.first <= 0) return;
+  // Until the readback the bounds can be those of our own posted placement; it decides then.
+  if (verifying_.count(hwnd) || moving_.count(hwnd)) return;
+  const auto placed = placed_.find(hwnd);
+  if (placed == placed_.end()) return;  // not placed yet: the first placement takes care of it
+  const std::optional<WindowFacts> facts = placer_.state(hwnd);
+  if (!facts || facts->iconic || facts->zoomed || facts->fullscreen || facts->cloaked) return;
+  if (!differs(placed->second, facts->rect)) return;
+  --settling->second.first;
+  clamped_.erase(hwnd);
+  if (const auto key = model_.keyOf(hwnd)) requestRetile(*key);
 }
 
 std::vector<QRect> TilingEngine::slotsFor(const WorkspaceKey& key, const QRect& area,

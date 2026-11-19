@@ -813,13 +813,56 @@ TEST(TilingEngine, AWindowThatClampsKeepsItsSlotAndLeavesAGap) {
   rig.engine.start();
   rig.open(1);
   rig.open(2);
-  rig.scheduler.advance(1000);  // the readback
-  // No retry loop: window 2 was placed once, window 1 keeps its slot.
-  EXPECT_EQ(rig.placer.slotsOf(2).size(), 1u);
+  rig.scheduler.advance(TilingEngine::kSettleMs + 1000);  // the readbacks, the settling period
+  // No retry loop: window 2 was placed once, plus the bounded settling placements of a new
+  // window; window 1 keeps its slot.
+  EXPECT_EQ(rig.placer.slotsOf(2).size(), 1u + TilingEngine::kSettlePlacements);
   EXPECT_EQ(rig.placer.lastSlot(2), rig.slot(1, 2));
   EXPECT_EQ(rig.placer.lastSlot(1), rig.slot(0, 2));
   EXPECT_EQ(rig.engine.status().clamped, 1);
   EXPECT_EQ(rig.scheduler.pending(), 0u);
+}
+
+TEST(TilingEngine, AWindowThatPutsBackItsSavedSizeOverThePlacementIsPlacedAgain) {
+  Rig rig;
+  rig.engine.start();
+  // The application restores the half-width size it saved when it last closed, right after the
+  // tiler placed it.
+  int placements = 0;
+  rig.placer.onPlace = [&](WindowId hwnd, const QRect&) {
+    if (++placements == 1) rig.placer.windows[hwnd].rect = QRect(0, 0, 955, 1040);
+  };
+  rig.placer.add(1);
+  rig.send(EventKind::Show, 1);
+  rig.scheduler.advance(TilingEngine::kVerifyMs * 3);
+  EXPECT_EQ(rig.placer.windows[1].rect, rig.slot(0, 1));
+  EXPECT_EQ(rig.placer.slotsOf(1).size(), 2u);
+  EXPECT_EQ(rig.engine.status().clamped, 0);
+}
+
+TEST(TilingEngine, AWindowThatResizesItselfSoonAfterItsReadbackIsPlacedAgain) {
+  Rig rig;
+  rig.engine.start();
+  rig.placer.add(1);
+  rig.send(EventKind::Show, 1);
+  rig.scheduler.advance(TilingEngine::kVerifyMs + 50);  // placed and read back
+  ASSERT_EQ(rig.placer.windows[1].rect, rig.slot(0, 1));
+  rig.placer.windows[1].rect = QRect(0, 0, 955, 1040);
+  rig.send(EventKind::LocationChange, 1);
+  rig.scheduler.advance(TilingEngine::kVerifyMs + 50);
+  EXPECT_EQ(rig.placer.windows[1].rect, rig.slot(0, 1));
+  EXPECT_EQ(rig.placer.slotsOf(1).size(), 2u);
+}
+
+TEST(TilingEngine, AWindowThatResizesItselfAfterItSettledKeepsItsBounds) {
+  Rig rig;
+  rig.engine.start();
+  rig.open(1);  // runs the settling period out
+  rig.placer.windows[1].rect = QRect(0, 0, 955, 1040);
+  rig.send(EventKind::LocationChange, 1);
+  rig.settle();
+  EXPECT_EQ(rig.placer.slotsOf(1).size(), 1u);
+  EXPECT_EQ(rig.placer.windows[1].rect, QRect(0, 0, 955, 1040));
 }
 
 TEST(TilingEngine, AWindowThatRefusesIsLeftAlone) {
