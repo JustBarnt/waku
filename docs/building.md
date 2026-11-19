@@ -29,6 +29,24 @@ cmd /c "call `"$vc`" arm64_amd64 && set VCPKG_ROOT=C:\vcpkg&& cmake --preset x64
 
 On an x64 host use `vcvarsall.bat x64` and the same presets.
 
+### More than one MSVC toolset
+
+vcpkg builds its packages with the newest MSVC toolset it finds, not necessarily the one
+`vcvarsall` selected for waku. With Visual Studio 2026 (MSVC 14.5x) installed next to the 2022
+Build Tools (14.44), the packages come out of 14.5x and linking `waku_tests` fails with unresolved
+STL symbols such as `__std_rotate` (LNK2001). `cmake\triplets\x64-windows-static-md.cmake` is the
+stock triplet pinned to v143 / 14.44. Point vcpkg at it with `VCPKG_OVERLAY_TRIPLETS`, set after
+`vcvarsall` like `VCPKG_ROOT`, from the repository root:
+
+```powershell
+cmd /c "call `"$vc`" x64 && set VCPKG_ROOT=C:\vcpkg&& set VCPKG_OVERLAY_TRIPLETS=%CD%\cmake\triplets&& cmake --preset x64-release && cmake --build --preset x64-release && ctest --preset x64-release -j"
+```
+
+The overlay must keep the triplet's name, so it replaces `x64-windows-static-md` instead of adding
+a new triplet. With another 2022 toolset, set `VCPKG_PLATFORM_TOOLSET_VERSION` in it to the first two
+parts of `%VCToolsVersion%` after `vcvarsall` (14.44 for 14.44.35207). Delete `build\<preset>\vcpkg_installed` after changing the
+overlay so the packages are built again. With a single toolset installed, leave the variable unset.
+
 Everything lands in `build\<preset>`: `waku.exe`, `wakuc.exe`, `wakukeys.exe` and
 `waku_tests.exe` with the Qt DLLs and the offscreen platform plugin that `windeployqt` copies next
 to it. The targets are `waku`, `wakuc`, `wakukeys`,
