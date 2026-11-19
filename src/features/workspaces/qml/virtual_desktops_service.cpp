@@ -1,5 +1,7 @@
 #include "features/workspaces/qml/virtual_desktops_service.h"
 
+#include <QGuiApplication>
+#include <QQuickWindow>
 #include <QVariantMap>
 
 #include "kernel/qt/live_desktop.h"
@@ -76,6 +78,7 @@ bool VirtualDesktops::refresh() {
     }
   }
   const bool canRemove = available && desktops.size() > 1 && system_ && system_->canRemove();
+  const bool switched = current_ >= 0 && current >= 0 && current != current_;
   const bool differs = available != available_ || current != current_ || canRemove != canRemove_ ||
                        desktops != desktops_;
   available_ = available;
@@ -83,7 +86,22 @@ bool VirtualDesktops::refresh() {
   current_ = current;
   desktops_ = std::move(desktops);
   if (differs) emit changed();
+  if (switched) redrawAfterSwitch();
   return differs;
+}
+
+void VirtualDesktops::redrawAfterSwitch() {
+  // The shell reacts to a switch while Windows still animates it, and the frame it draws then can
+  // be the last one shown: the bar kept the old desktop's pill active until the pointer moved over
+  // it. Nothing else asks for a frame, so ask once the animation is over.
+  for (const int ms : kRedrawAfterSwitchMs) {
+    QTimer::singleShot(ms, this, [] {
+      for (QWindow* window : QGuiApplication::topLevelWindows()) {
+        auto* quick = qobject_cast<QQuickWindow*>(window);
+        if (quick && quick->isVisible()) quick->update();
+      }
+    });
+  }
 }
 
 void VirtualDesktops::switchTo(int index) {

@@ -46,6 +46,9 @@ class VirtualDesktops : public QObject, public DesktopControl {
   static constexpr int kPollIntervalMs = 500;         // without a change hook
   static constexpr int kSafetyPollIntervalMs = 5000;  // with one
   static constexpr int kCoalesceMs = 40;
+  // After the shown desktop changes, the shell's windows draw again at these times: past the
+  // switch animation (700 ms), and once more for a slow machine.
+  static constexpr int kRedrawAfterSwitchMs[] = {750, 1500};
 
   explicit VirtualDesktops(QObject* parent = nullptr);
   // Test seam: a fake system; null means none. The timer does not start; call refresh().
@@ -98,6 +101,8 @@ class VirtualDesktops : public QObject, public DesktopControl {
   void installHook();
   // Reads after `ms`, once for any number of requests inside that time.
   void scheduleRefresh(int ms);
+  // Asks every visible Qt Quick window of the process for a frame after the switch animation.
+  void redrawAfterSwitch();
 
   std::unique_ptr<vdesk::VirtualDesktopSystem> system_;
   QTimer timer_;

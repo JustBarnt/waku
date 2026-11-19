@@ -63,6 +63,11 @@ callbacks are marshalled to it.
   fallback. A failed jump logs `virtual desktops: jump failed: <reason>` and does nothing.
   Keystrokes (Win+Ctrl+Left/Right) were tried first and dropped: Windows ignores a key pressed while
   the last switch animates, so a switch of several desktops moved one.
+- **Redraw.** The shell updates its widgets as soon as the read after a switch reports the new
+  desktop, while Windows still animates the switch. The frame drawn then could stay on screen until
+  the pointer moved over the bar (the old desktop's pill kept its active colour and width). When a
+  read finds another shown desktop, every visible Qt Quick window of the process is asked for a
+  frame at 750 ms and 1500 ms, after the animation.
 - **Focus.** The shell call switches but leaves the focus where it was: on a window of the previous
   desktop, now cloaked, which still takes the keyboard. After a switch through the shell interface
   (700 ms, or 100 ms unanimated) and after `move` sends the foreground window away (100 ms), a timer
