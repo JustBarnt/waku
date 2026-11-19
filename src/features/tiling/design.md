@@ -104,10 +104,12 @@ async flag keeps a hung app from blocking the GUI thread, so the readback right 
 be stale: 150 ms later the engine reads the bounds again. A window that clamps (a minimum size)
 keeps its slot, leaves a gap and is counted in `status`. The one exception is a window the engine
 has just started managing: an application that saved its size when it last closed (half the
-width, next to another tile) puts it back right after it shows, over the placement. For 2 s
-(`kSettleMs`) such a window is placed again when the readback or a later location event finds it
+width, next to another tile) puts it back after it shows, over the placement; a browser's session
+restore does it seconds later. For 10 s (`kSettleMs`) such a window is placed again when the readback or a later location event finds it
 off its slot, twice at most (`kSettlePlacements`); a real clamp costs those two extra calls and is
-then left alone. Changes after that are the window's own. The slot is the
+then left alone. Changes after that are the window's own. With `--log-file`, every decision is a
+debug line starting `tiling:` (manage, float, ignore with its reason, place, readback, a window
+that moved itself), naming the window by handle, process and class, never by title. The slot is the
 visible bounds; `outerRect` adds the invisible border per edge (`GetWindowRect` minus
 `DWMWA_EXTENDED_FRAME_BOUNDS`). The work area is `rcWork` of the window's monitor in physical
 pixels. A cloaked window is never placed. Retile requests are coalesced: any number in one turn

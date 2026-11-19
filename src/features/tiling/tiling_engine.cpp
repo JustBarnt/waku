@@ -20,6 +20,25 @@ constexpr int kCloakSettleMs = 150;
 // from where the tiler left it (rounding and DPI jitter stay below it).
 constexpr int kMovedTolerance = 2;
 
+// "0x1a2b3c zen.exe MozillaWindowClass" for the debug lines: no title, which can be private.
+QString describe(WindowId hwnd, const WindowFacts* facts) {
+  QString text = QStringLiteral("0x") + QString::number(hwnd, 16);
+  if (facts) text += QLatin1Char(' ') + facts->processName + QLatin1Char(' ') + facts->className;
+  return text;
+}
+
+QString rectText(const QRect& r) {
+  return QStringLiteral("%1,%2 %3x%4").arg(r.x()).arg(r.y()).arg(r.width()).arg(r.height());
+}
+
+// Ignore verdicts that every menu, tooltip and helper window gets: not worth a line each.
+bool quietIgnore(const QString& reason) {
+  return reason == QLatin1String("own process") || reason == QLatin1String("tool window") ||
+         reason == QLatin1String("ignored class") ||
+         reason == QLatin1String("owned by a visible window") ||
+         reason == QLatin1String("not visible");
+}
+
 bool differs(const QRect& a, const QRect& b) {
   return std::abs(a.x() - b.x()) > kMovedTolerance || std::abs(a.y() - b.y()) > kMovedTolerance ||
          std::abs(a.width() - b.width()) > kMovedTolerance ||
@@ -405,6 +424,17 @@ void TilingEngine::evaluate(WindowId hwnd, int attempt, bool force, bool initial
   }
   const Eligibility eligibility =
       classify(candidate, settings_.rules, settings_.selfElevated, force);
+  if (eligibility.verdict == Verdict::Ignore && !quietIgnore(eligibility.reason)) {
+    qDebug().noquote() << "tiling: ignore" << describe(hwnd, &*facts) << "-" << eligibility.reason;
+  } else if (eligibility.verdict == Verdict::Float) {
+    qDebug().noquote() << "tiling: float" << describe(hwnd, &*facts) << "-" << eligibility.reason;
+  } else if (eligibility.verdict == Verdict::Retry && attempt >= kMaxRetries) {
+    qDebug().noquote() << "tiling: gave up on" << describe(hwnd, &*facts) << "-"
+                       << eligibility.reason;
+  } else if (eligibility.verdict == Verdict::Manage) {
+    qDebug().noquote() << "tiling: manage" << describe(hwnd, &*facts) << "at"
+                       << rectText(facts->rect);
+  }
   switch (eligibility.verdict) {
     case Verdict::Ignore:
       if (eligibility.reason != QStringLiteral("cloaked")) restoreBeforeTile_.erase(hwnd);
@@ -569,6 +599,8 @@ void TilingEngine::retile(const WorkspaceKey& key) {
     }
     // Before the call: the location event of this placement can arrive while it runs.
     verifying_.insert(hwnd);
+    qDebug().noquote() << "tiling: place" << describe(hwnd, nullptr) << "from"
+                       << rectText(current[hwnd]) << "to" << rectText(slot);
     const PlaceResult result = placer_.place(hwnd, slot);
     if (!result.ok) {
       // It refused (elevated, gone): leave it alone from now on.
@@ -645,9 +677,15 @@ void TilingEngine::verifyPlacements(const std::vector<std::pair<WindowId, QRect>
     if (!paused_ && settling != settling_.end() && settling->second.first > 0 &&
         !facts->iconic && !facts->zoomed && !facts->fullscreen && !facts->cloaked) {
       --settling->second.first;
+      qDebug().noquote() << "tiling: readback" << describe(hwnd, &*facts) << "found"
+                         << rectText(facts->rect) << "instead of" << rectText(slot)
+                         << "- placing again";
       again.emplace_back(hwnd, slot);
       continue;
     }
+    qDebug().noquote() << "tiling: readback" << describe(hwnd, &*facts) << "found"
+                       << rectText(facts->rect) << "instead of" << rectText(slot)
+                       << "- clamped, left there";
     clamped_.insert(hwnd);
   }
   for (const auto& [hwnd, slot] : again) {
@@ -673,8 +711,7 @@ void TilingEngine::startSettling(WindowId hwnd) {
 }
 
 void TilingEngine::onSettlingMove(WindowId hwnd) {
-  const auto settling = settling_.find(hwnd);
-  if (!running_ || paused_ || settling == settling_.end() || settling->second.first <= 0) return;
+  if (!running_ || paused_ || !model_.contains(hwnd)) return;
   // Until the readback the bounds can be those of our own posted placement; it decides then.
   if (verifying_.count(hwnd) || moving_.count(hwnd)) return;
   const auto placed = placed_.find(hwnd);
@@ -682,6 +719,17 @@ void TilingEngine::onSettlingMove(WindowId hwnd) {
   const std::optional<WindowFacts> facts = placer_.state(hwnd);
   if (!facts || facts->iconic || facts->zoomed || facts->fullscreen || facts->cloaked) return;
   if (!differs(placed->second, facts->rect)) return;
+  const auto settling = settling_.find(hwnd);
+  if (settling == settling_.end() || settling->second.first <= 0) {
+    // Its own change, after the settling period or once its placements are spent: it stays. Noted
+    // once per change, so the log shows why a tiled window is off its slot.
+    qDebug().noquote() << "tiling:" << describe(hwnd, &*facts) << "moved itself to"
+                       << rectText(facts->rect) << "- left there";
+    placed->second = facts->rect;
+    return;
+  }
+  qDebug().noquote() << "tiling:" << describe(hwnd, &*facts) << "moved itself to"
+                     << rectText(facts->rect) << "while settling - placing again";
   --settling->second.first;
   clamped_.erase(hwnd);
   if (const auto key = model_.keyOf(hwnd)) requestRetile(*key);

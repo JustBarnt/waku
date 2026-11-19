@@ -83,7 +83,9 @@ class TilingEngine {
   static constexpr int kVerifyMs = 150;
   // A newly managed window whose bounds move away from its slot within this time, by itself, is
   // placed again, this many times at most; later changes are its own.
-  static constexpr int kSettleMs = 2000;
+  // Long enough for a browser's session restore, which sets the saved size seconds after the
+  // window shows.
+  static constexpr int kSettleMs = 10000;
   static constexpr int kSettlePlacements = 2;
 
   TilingEngine(WindowPlacer& placer, Scheduler& scheduler);
