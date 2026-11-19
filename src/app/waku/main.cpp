@@ -9,6 +9,7 @@
 #include <QProcess>
 #include <QQmlEngine>
 #include <QQuickWindow>
+#include <cstdio>
 #include <cstdlib>
 #include <memory>
 #include <string>
@@ -71,9 +72,39 @@ void restartAtExit() {
   }
 }
 
+// Where Qt's messages go without --log-file. Qt's own handler sends every message of a windowed
+// process to OutputDebugString, which waits while a program listening for debug output reads it;
+// a shell that logs a few hundred lines at start-up then appeared seconds late (measured: an
+// Octalia start took about twice as long as with --log-file). Here a message goes to stderr when
+// it is a file, pipe or console (start.ps1 -Dev redirects it), and to the debug output only while
+// a debugger is attached or WAKU_DEBUG_OUTPUT is set (for a viewer such as DebugView). Otherwise it
+// is dropped. --log-file installs its own handler, which calls this one (host/run_log.cpp).
+void defaultMessageHandler(QtMsgType type, const QMessageLogContext& context, const QString& text) {
+  static const bool debugOutputWanted = qEnvironmentVariableIsSet("WAKU_DEBUG_OUTPUT");
+  static const bool hasStderr = [] {
+    const HANDLE handle = GetStdHandle(STD_ERROR_HANDLE);
+    return handle != nullptr && handle != INVALID_HANDLE_VALUE &&
+           GetFileType(handle) != FILE_TYPE_UNKNOWN;
+  }();
+  const bool toDebugger = debugOutputWanted || IsDebuggerPresent();
+  if (!hasStderr && !toDebugger) return;
+  const QString line = qFormatLogMessage(type, context, text);
+  if (hasStderr) {
+    const QByteArray bytes = line.toLocal8Bit();
+    std::fprintf(stderr, "%s\n", bytes.constData());
+    std::fflush(stderr);
+  }
+  if (toDebugger) {
+    const QString withNewline = line + QLatin1Char('\n');
+    OutputDebugStringW(reinterpret_cast<const wchar_t*>(withNewline.utf16()));
+  }
+}
+
 }  // namespace
 
 int main(int argc, char* argv[]) {
+  // First, so nothing waku or Qt logs reaches OutputDebugString uninvited.
+  qInstallMessageHandler(defaultMessageHandler);
   waku::host::startTrace();
   // Keeps the process MTA alive for the whole run. Icon and shortcut reads on pool threads do
   // CoInitializeEx(MTA) ... CoUninitialize() per call; without this the last one out tears the MTA

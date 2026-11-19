@@ -15,6 +15,15 @@ be opened, waku prints one warning and runs without a log.
 The file holds your config path, the command line and your screen layout. It holds no window
 titles, no environment and no secrets, but read it before you attach it to a public issue.
 
+## Without a log file
+
+Without `--log-file`, a message goes to stderr when stderr is a file, a pipe or a console (for
+example `start.ps1 -Dev`, which redirects it), and to the Windows debug output only while a
+debugger is attached. Everything else is dropped. Set `WAKU_DEBUG_OUTPUT=1` to send every message
+to the debug output anyway, for a viewer such as DebugView. Qt's own default would write each
+message to the debug output, which waits on any program that listens to it and slowed a shell
+that logs a lot at start-up to about half the speed of a run with `--log-file`.
+
 ## Format: JSON Lines
 
 One compact JSON object per line, UTF-8. Every line is valid JSON by itself, each line is flushed
