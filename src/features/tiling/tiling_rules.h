@@ -15,6 +15,7 @@ enum class RuleAction {
   Ignore,  // never managed: the tiler leaves the window alone
   Float,   // managed as a floating window: never placed, but toggleFloat can tile it
   Tile,    // managed even without a thick frame or a caption (a game with a fixed-size window)
+  Settle,  // managed, and placed again while it puts back the bounds it saved (Zen, Firefox)
 };
 
 // One user rule. A rule matches when every field it sets matches: `process` and `className` are
@@ -32,7 +33,7 @@ struct ParsedRules {
 };
 
 // The rules of the shell: a list of maps `{process, class, title, action}` (`action` is "ignore",
-// "float" or "tile", default "ignore"). An entry that sets no matcher, has an unknown action or a
+// "float", "tile" or "settle", default "ignore"). An entry that sets no matcher, has an unknown action or a
 // title that is not a valid regular expression is skipped and reported in `errors`.
 ParsedRules parseRules(const QVariantList& entries);
 
@@ -55,6 +56,9 @@ struct Eligibility {
   // An Ignore that holds for the life of the window (a tool window stays one). The others depend on
   // a state that can change (hidden, maximized), so a later Show looks again.
   bool lasting = false;
+  // A Manage under a `settle` rule: the engine places the window again while it puts back its
+  // saved bounds after it opens.
+  bool settle = false;
 };
 
 // Whether a window belongs to the tiler. A window is managed unless it is: not visible, cloaked,

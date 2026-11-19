@@ -21,6 +21,9 @@ namespace {
 constexpr int kGap = 10;
 const QRect kAreaA(0, 0, 1920, 1040);
 
+struct Rig;
+void settleRule(Rig& rig);
+
 struct Rig {
   Rig() {
     TilingSettings settings;
@@ -46,6 +49,15 @@ struct Rig {
   FakeScheduler scheduler;
   TilingEngine engine{placer, scheduler};
 };
+
+// A `settle` rule for the test windows' process.
+void settleRule(Rig& rig) {
+  TilingSettings settings = rig.engine.settings();
+  settings.rules = parseRules({QVariantMap{{QStringLiteral("process"), QStringLiteral("app.exe")},
+                                           {QStringLiteral("action"), QStringLiteral("settle")}}})
+                       .rules;
+  rig.engine.setSettings(settings);
+}
 
 }  // namespace
 
@@ -813,18 +825,49 @@ TEST(TilingEngine, AWindowThatClampsKeepsItsSlotAndLeavesAGap) {
   rig.engine.start();
   rig.open(1);
   rig.open(2);
-  rig.scheduler.advance(TilingEngine::kSettleMs + 1000);  // the readbacks, the settling period
-  // No retry loop: window 2 was placed once, plus the bounded settling placements of a new
-  // window; window 1 keeps its slot.
-  EXPECT_EQ(rig.placer.slotsOf(2).size(), 1u + TilingEngine::kSettlePlacements);
+  rig.scheduler.advance(1000);  // the readback
+  // No retry loop: window 2 was placed once, window 1 keeps its slot.
+  EXPECT_EQ(rig.placer.slotsOf(2).size(), 1u);
   EXPECT_EQ(rig.placer.lastSlot(2), rig.slot(1, 2));
   EXPECT_EQ(rig.placer.lastSlot(1), rig.slot(0, 2));
   EXPECT_EQ(rig.engine.status().clamped, 1);
   EXPECT_EQ(rig.scheduler.pending(), 0u);
 }
 
+TEST(TilingEngine, AWindowThatPutsBackItsSavedSizeKeepsItWithoutASettleRule) {
+  Rig rig;
+  rig.engine.start();
+  int placements = 0;
+  rig.placer.onPlace = [&](WindowId hwnd, const QRect&) {
+    if (++placements == 1) rig.placer.windows[hwnd].rect = QRect(0, 0, 955, 1040);
+  };
+  rig.placer.add(1);
+  rig.send(EventKind::Show, 1);
+  rig.scheduler.advance(1500);
+  EXPECT_EQ(rig.placer.slotsOf(1).size(), 1u);
+  EXPECT_EQ(rig.placer.windows[1].rect, QRect(0, 0, 955, 1040));
+  EXPECT_EQ(rig.engine.status().clamped, 1);
+}
+
+TEST(TilingEngine, AClampedWindowUnderASettleRuleGetsTheBoundedPlacementsOnly) {
+  Rig rig;
+  settleRule(rig);
+  rig.placer.clamp = [](WindowId hwnd, const QRect& slot) {
+    return hwnd == 1 ? QRect(slot.x(), slot.y(), std::max(slot.width(), 2000), slot.height())
+                     : slot;
+  };
+  rig.engine.start();
+  rig.placer.add(1);
+  rig.send(EventKind::Show, 1);
+  rig.scheduler.advance(TilingEngine::kSettleMs + 1000);
+  EXPECT_EQ(rig.placer.slotsOf(1).size(), 1u + TilingEngine::kSettlePlacements);
+  EXPECT_EQ(rig.engine.status().clamped, 1);
+  EXPECT_EQ(rig.scheduler.pending(), 0u);
+}
+
 TEST(TilingEngine, AWindowThatPutsBackItsSavedSizeOverThePlacementIsPlacedAgain) {
   Rig rig;
+  settleRule(rig);
   rig.engine.start();
   // The application restores the half-width size it saved when it last closed, right after the
   // tiler placed it.
@@ -842,6 +885,7 @@ TEST(TilingEngine, AWindowThatPutsBackItsSavedSizeOverThePlacementIsPlacedAgain)
 
 TEST(TilingEngine, AWindowThatRestoresItsBoundsInStepsIsPlacedAgainAfterTheLastOne) {
   Rig rig;
+  settleRule(rig);
   rig.engine.start();
   // As Zen did: after the placement it puts back its saved position, then, 300 ms later, its
   // saved width. A placement between the two would be undone by the second.
@@ -867,6 +911,7 @@ TEST(TilingEngine, AWindowThatRestoresItsBoundsInStepsIsPlacedAgainAfterTheLastO
 
 TEST(TilingEngine, AWindowThatResizesItselfSoonAfterItsReadbackIsPlacedAgain) {
   Rig rig;
+  settleRule(rig);
   rig.engine.start();
   rig.placer.add(1);
   rig.send(EventKind::Show, 1);
@@ -881,6 +926,7 @@ TEST(TilingEngine, AWindowThatResizesItselfSoonAfterItsReadbackIsPlacedAgain) {
 
 TEST(TilingEngine, AWindowThatResizesItselfAfterItSettledKeepsItsBounds) {
   Rig rig;
+  settleRule(rig);
   rig.engine.start();
   rig.open(1);  // runs the settling period out
   rig.placer.windows[1].rect = QRect(0, 0, 955, 1040);

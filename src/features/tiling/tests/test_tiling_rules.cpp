@@ -128,6 +128,21 @@ TEST(TilingRules, ATileRuleManagesAWindowWithoutAThickFrameOrCaption) {
   EXPECT_EQ(classify(tileable(), rules, false).verdict, Verdict::Manage);
 }
 
+TEST(TilingRules, ASettleRuleManagesTheWindowAndMarksIt) {
+  const auto rules =
+      parseRules({rule(QStringLiteral("notepad.exe"), QStringLiteral("settle"))}).rules;
+  ASSERT_EQ(rules.size(), 1u);
+  EXPECT_EQ(rules[0].action, RuleAction::Settle);
+  const Eligibility named = classify(tileable(), rules, false);
+  EXPECT_EQ(named.verdict, Verdict::Manage);
+  EXPECT_TRUE(named.settle);
+  EXPECT_FALSE(classify(tileable(), {}, false).settle);
+  // It lifts no check: a window without a thick frame stays out.
+  WindowFacts fixedSize = tileable();
+  fixedSize.thickFrame = false;
+  EXPECT_EQ(classify(fixedSize, rules, false).verdict, Verdict::Ignore);
+}
+
 TEST(TilingRules, ATileRuleOnlyMatchesItsOwnWindow) {
   const auto rules = parseRules({rule(QStringLiteral("game.exe"), QStringLiteral("tile"))}).rules;
   WindowFacts fixedSize = tileable();

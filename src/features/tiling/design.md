@@ -11,7 +11,8 @@ Component.onCompleted: {
     Tiling.ratio = 0.5
     Tiling.rules = [{ process: "Calculator.exe", action: "float" },
                     { class: "TaskManagerWindow", action: "ignore" },
-                    { process: "Game.exe", action: "tile" }]
+                    { process: "Game.exe", action: "tile" },
+                    { process: "zen.exe", action: "settle" }]
     Tiling.enabled = true
 }
 ```
@@ -22,7 +23,7 @@ Component.onCompleted: {
 |---|---|
 | `layouts.*` | pure geometry: `layoutSlots`, `outerRect` (border compensation), names |
 | `tiling_model.*` | per `(HMONITOR, desktop GUID)` ordered slots (a slot is one window or a stack of windows), layout override, float set |
-| `tiling_rules.*` | user rules (`process`, `class`, `title` regex -> `ignore`, `float` or `tile`) and `classify`, the eligibility function |
+| `tiling_rules.*` | user rules (`process`, `class`, `title` regex -> `ignore`, `float`, `tile` or `settle`) and `classify`, the eligibility function |
 | `window_placer.h` | the interface to the machine: enumerate, query facts, work area, shown desktop, `place`, `raise`, `activate` |
 | `tiling_engine.*` | the behaviour: events in, placements out |
 | `tiling_events.h` | event kinds, WinEvent codes, the `TilingHooks` interface |
@@ -86,6 +87,20 @@ fixed-size or frameless window). It lifts those two checks only: a fullscreen, m
 elevated window stays unmanaged. Whether the window redraws at the size of its slot is up to the
 application; one that refuses the size is handled like any other clamped window.
 
+A `settle` rule is for an application that puts back the size and position it saved when it last
+closed, after it has shown, over the tiler's placement. Zen and Firefox do this, and do it in steps:
+their saved position at once, their saved width about half a second later. Without the rule such a
+window opens in its slot, then shrinks back to its saved bounds (half the width, when it last shared
+the screen with another tile), and the tiler leaves it there as a clamped window. The rule lifts no
+check; a window it names is managed as any other and, right after it opens, placed again once it has
+stopped changing its own bounds (see Placement). Add one only for an application that does this:
+under the rule a window's own changes in its first 10 s, a Win+Arrow snap included, are undone.
+
+```qml
+Tiling.rules = [{ process: "zen.exe", action: "settle" },
+                { process: "firefox.exe", action: "settle" }]
+```
+
 On load or shell reload, the initial scan waits one event-loop turn so the shell can set its rules.
 It restores otherwise eligible maximized windows with `ShowWindowAsync(SW_SHOWNOACTIVATE)` and waits
 for the maximized state to clear before placing them. Restoration is requested once, with bounded
@@ -102,11 +117,10 @@ maximization, releases their work area, and restores their reservation once maxi
 ASYNCWINDOWPOS)` per window; not `DeferWindowPos`, which fails as a batch on one bad window. The
 async flag keeps a hung app from blocking the GUI thread, so the readback right after the call can
 be stale: 150 ms later the engine reads the bounds again. A window that clamps (a minimum size)
-keeps its slot, leaves a gap and is counted in `status`. The one exception is a window the engine
-has just started managing: an application that saved its size when it last closed (half the
-width, next to another tile) puts it back after it shows, over the placement; a browser's session
-restore does it seconds later, and in steps (Zen: its saved position, then 300 ms later its saved
-width). For 10 s (`kSettleMs`), a readback or a location event that finds such a window off its
+keeps its slot, leaves a gap and is counted in `status`. The one exception is a window a `settle`
+rule names, right after it opens: such an application puts back the bounds it saved when it last
+closed, over the placement, possibly seconds later and in steps (Zen: its saved position, then
+300 ms later its saved width). For 10 s (`kSettleMs`), a readback or a location event that finds such a window off its
 slot starts a 300 ms wait (`kSettleQuietMs`) that each further change restarts; when it runs out
 the window is placed again, three times at most (`kSettlePlacements`). Placing again at once lost
 to Zen: the corrections landed between its steps. A real clamp costs the three extra placements and

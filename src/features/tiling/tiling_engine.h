@@ -71,9 +71,9 @@ enum class FloatOutcome { NoWindow, Floated, Tiled, Unchanged, Ineligible };
 // Startup restores eligible maximized windows before tiling them; later maximization is respected.
 // It never activates a window, never places a cloaked, minimized, maximized or fullscreen one, and
 // reads the rectangle back after a placement: a window that clamps (minimum size) keeps its slot
-// and leaves a gap. Only a window the engine has just started managing is placed again: an
+// and leaves a gap. The exception is a window a `settle` rule names, right after it opens: an
 // application that puts back the bounds it saved when it last closed does so after it shows, over
-// the tiler's placement, sometimes in steps (a browser: the position, then the size). Within
+// the tiler's placement, sometimes in steps (Zen and Firefox: the position, then the size). Within
 // kSettleMs, each change it makes restarts a kSettleQuietMs wait; when the wait runs out it is
 // placed again, kSettlePlacements times at most.
 class TilingEngine {
@@ -83,7 +83,8 @@ class TilingEngine {
   // How long after a placement the engine reads the window's bounds back: SetWindowPos is posted,
   // so the window applies it a moment later.
   static constexpr int kVerifyMs = 150;
-  // A newly managed window that moves off its slot by itself within kSettleMs is placed again
+  // A newly managed window under a `settle` rule that moves off its slot by itself within kSettleMs
+  // is placed again
   // once it has made no change for kSettleQuietMs, kSettlePlacements times at most; later changes
   // are its own. kSettleMs covers a browser's session restore, which can come seconds after the
   // window shows.

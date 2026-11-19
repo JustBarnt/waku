@@ -433,7 +433,7 @@ void TilingEngine::evaluate(WindowId hwnd, int attempt, bool force, bool initial
                        << eligibility.reason;
   } else if (eligibility.verdict == Verdict::Manage) {
     qDebug().noquote() << "tiling: manage" << describe(hwnd, &*facts) << "at"
-                       << rectText(facts->rect);
+                       << rectText(facts->rect) << (eligibility.settle ? "(settle rule)" : "");
   }
   switch (eligibility.verdict) {
     case Verdict::Ignore:
@@ -457,7 +457,7 @@ void TilingEngine::evaluate(WindowId hwnd, int attempt, bool force, bool initial
       ignored_.erase(hwnd);
       const WorkspaceKey key = keyFor(*facts);
       model_.add(key, hwnd);
-      startSettling(hwnd);
+      if (eligibility.settle) startSettling(hwnd);
       requestRetile(key);
       break;
     }

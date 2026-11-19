@@ -40,9 +40,11 @@ ParsedRules parseRules(const QVariantList& entries) {
       rule.action = RuleAction::Float;
     } else if (action == QLatin1String("tile")) {
       rule.action = RuleAction::Tile;
+    } else if (action == QLatin1String("settle")) {
+      rule.action = RuleAction::Settle;
     } else {
-      out.errors
-          << where + QStringLiteral("unknown action '%1' (ignore, float or tile)").arg(action);
+      out.errors << where + QStringLiteral("unknown action '%1' (ignore, float, tile or settle)")
+                                .arg(action);
       continue;
     }
     out.rules.push_back(std::move(rule));
@@ -115,6 +117,7 @@ Eligibility classify(const WindowFacts& facts, const std::vector<Rule>& rules, b
     const std::optional<RuleAction> action = matchRules(rules, facts);
     if (action == RuleAction::Ignore) return ignore("rule");
     if (action == RuleAction::Float) return {Verdict::Float, QStringLiteral("rule")};
+    if (action == RuleAction::Settle) return {Verdict::Manage, QString(), false, true};
   }
   return {Verdict::Manage, QString()};
 }

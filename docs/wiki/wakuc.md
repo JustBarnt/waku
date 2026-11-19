@@ -177,6 +177,17 @@ focus. Windows on another virtual desktop wait until that desktop is shown. Mini
 explicit ignore or float rules stay untouched. Maximizing a window afterward keeps it out of the
 layout until it is restored; `tile retile` does not undo that choice.
 
+Some applications put back the size and position they saved when they last closed, right after
+they open. Zen and Firefox do: a window you last used at half the width, next to another tile,
+opens in its slot and then shrinks back to half the width. If that bothers you, name the
+application in a `settle` rule in your shell. The tiler then places the window again once it has
+stopped resizing itself, for its first 10 seconds. Leave other applications out of the rule: under
+it, a window's own size changes in those seconds, a Win+Arrow snap included, are undone.
+
+```qml
+Tiling.rules = [{ process: "zen.exe", action: "settle" }]
+```
+
 When waku's tiler is active, maximizing a window with the square title-bar button auto-hides
 docked bars on its monitor and releases their work area. Move the pointer to the bar's screen edge
 to reveal it temporarily. Restore the window, or focus it and run `wakuc tile toggle` (`Alt+F` in
