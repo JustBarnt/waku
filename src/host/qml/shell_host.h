@@ -127,6 +127,10 @@ class ShellHost : public QObject {
     // How long the number of windows on screen must stop growing, counted from install(), before
     // the working set is trimmed (hooks.trimWorkingSet). Tests shorten it.
     int trimDelayMs = 5000;
+    // How long a reloaded shell that built cleanly but has no window yet gets to make one (a
+    // Loader that waits for its settings file) before the reload counts as failed. Tests shorten
+    // it.
+    int windowGraceMs = 10000;
   };
 
   // The built-in shell of safe mode: Clock, Workspaces, Volume, Battery, Cpu and Memory.
@@ -263,6 +267,8 @@ class ShellHost : public QObject {
   void updateFullscreenReveal();
   void setError(const QString& error);
   void trimIfSettled();
+  // windowGrace_ ran out: the shell still has no window, so the fallback shows the error.
+  void windowGraceExpired();
   // Walks the config home again and watches what it finds.
   void refreshWatches();
   // Replaces the watched paths with `paths`.
@@ -304,6 +310,9 @@ class ShellHost : public QObject {
   QTimer fullscreenTimer_;
   // GUI-thread cursor checks, only while a fullscreen panel needs edge reveal.
   QTimer revealTimer_;
+  // Single shot, started by reload() for a shell installed without a window; adopt() stops it at
+  // the shell's first window. reloaded() is emitted when either happens.
+  QTimer windowGrace_;
   // The window count at the last look (install() or the previous timer tick).
   int windowsSeen_ = 0;
   FileStamps snapshot_;

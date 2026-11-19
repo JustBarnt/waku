@@ -290,6 +290,8 @@ ShellHost::ShellHost(QQmlEngine* engine, Options options, QObject* parent)
   });
   trimTimer_.setSingleShot(true);
   connect(&trimTimer_, &QTimer::timeout, this, [this] { trimIfSettled(); });
+  windowGrace_.setSingleShot(true);
+  connect(&windowGrace_, &QTimer::timeout, this, [this] { windowGraceExpired(); });
   revealTimer_.setInterval(50);
   connect(&revealTimer_, &QTimer::timeout, this, [this] { updateFullscreenReveal(); });
   if (options_.hooks.screenOccupancyOnMonitor) {
@@ -490,8 +492,10 @@ bool ShellHost::reload(const char* cause) {
   QString error;
   std::unique_ptr<Loaded> next;
   // The reset below destroys the old shell: remember whether it had windows, so a new shell
-  // that creates none (a Variants delegate that failed) is an error and not an empty screen.
-  const bool hadWindows = loaded_ && hasWindows(*loaded_);
+  // that creates none (a Variants delegate that failed) is an error and not an empty screen. A
+  // shell still inside its grace counts as having had them; this reload replaces its wait.
+  const bool hadWindows = (loaded_ && hasWindows(*loaded_)) || windowGrace_.isActive();
+  windowGrace_.stop();
   WarningCapture warnings;
   QStringList importLines;
   const QString legacyPath = QDir(options_.configHome).filePath(options_.legacyEntryFile);
@@ -565,10 +569,23 @@ bool ShellHost::reload(const char* cause) {
   if (next) {
     int built = 0;
     const QString failed = failures(*next, &built);
-    if (failed.isEmpty() && !hasWindows(*next) && hadWindows) {
-      // Nothing failed loudly, yet no window exists and the old shell is already gone.
-      error = QStringLiteral("the shell created no windows");
-      if (!warnings.first().isEmpty()) error += QStringLiteral(": ") + warnings.first();
+    if (failed.isEmpty() && !hasWindows(*next) && hadWindows && warnings.first().isEmpty()) {
+      // Nothing failed and nothing warned: a shell may make its windows a moment after it is
+      // created (a Loader that waits for its settings file). Throwing it away would leave nothing
+      // on screen, since the old shell is already gone: show it, and fail only if it still has no
+      // window after windowGraceMs.
+      setError({});
+      install(std::move(next));
+      if (loaded_ && hasWindows(*loaded_)) {
+        emit reloaded(true);
+      } else {
+        traceStep("waiting for the shell's first window");
+        windowGrace_.start(options_.windowGraceMs);
+      }
+      return true;
+    } else if (failed.isEmpty() && !hasWindows(*next) && hadWindows) {
+      // No window and a warning while building: a Variants delegate failed.
+      error = QStringLiteral("the shell created no windows: ") + warnings.first();
       qWarning().noquote() << "waku:" << error;
       next.reset();
     } else if (!failed.isEmpty() && built == 0) {
@@ -590,6 +607,17 @@ bool ShellHost::reload(const char* cause) {
   if (!loaded_) buildFallback();  // nothing to keep: show the error
   emit reloaded(false);
   return false;
+}
+
+void ShellHost::windowGraceExpired() {
+  if (!loaded_ || hasWindows(*loaded_)) return;  // adopt() reported the first window
+  const QString error = QStringLiteral("the shell created no windows within %1 s")
+                            .arg(options_.windowGraceMs / 1000.0);
+  qWarning().noquote() << "waku:" << error;
+  resetEngine();
+  setError(error);
+  buildFallback();
+  emit reloaded(false);
 }
 
 void ShellHost::resetEngine() {
@@ -742,6 +770,13 @@ void ShellHost::adopt(QsWindow* window) {
     // Made after install, by a Variants or a LazyLoader: shown at once.
     if (!window->buildError().isEmpty()) setError(window->buildError());
     present(target->entries.back());
+    if (windowGrace_.isActive() && loaded_ && hasWindows(*loaded_)) {
+      // The first window of a shell reload() installed without one: the reload succeeded.
+      // Queued: this runs inside the window's componentComplete, and reloaded() reaches QML.
+      windowGrace_.stop();
+      traceStep("the shell's first window arrived");
+      QMetaObject::invokeMethod(this, [this] { emit reloaded(true); }, Qt::QueuedConnection);
+    }
   }
 }
 

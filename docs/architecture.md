@@ -534,10 +534,13 @@ definitions and the new shell failed with `Unable to assign Foo to Foo` and null
   `Quickshell` singleton on `singletonsCleared`). A shell part that caches one (`WallpaperSettings`)
   is destroyed with the old shell and resolves it again in `activate()`.
 - A shell that does not compile or cannot be created leaves the fallback shell with the error: the
-  old shell is gone. A new shell that creates no window while the old one had some (a `Variants`
-  delegate that failed) counts as a failure too: the error is `the shell created no windows` plus
-  the first QML warning of the build, and `reload()` returns false. A first start with no windows
-  stays valid.
+  old shell is gone. A new shell that creates no window while the old one had some, and logged a
+  QML warning while it was built (a `Variants` delegate that failed), counts as a failure too: the
+  error is `the shell created no windows` plus that warning, and `reload()` returns false. One that
+  built without a warning is installed, since it may make its windows a moment later (a `Loader`
+  that waits for its settings file): `reload()` returns true and `reloaded` waits for its first
+  window. With none after `windowGraceMs` (10 s), the fallback shows `the shell created no windows
+  within 10 s` and `reloaded(false)` follows. A first start with no windows stays valid.
 - State that must survive stays outside the singletons: `PersistentProperties` (per engine), the
   taskbar marker, `kernel::Hotkeys`, and the shared hubs (`kernel::LingeringHub`: the media and
   notification services, the system_stats data sources), which live while any holder lives and

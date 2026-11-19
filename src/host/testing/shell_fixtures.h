@@ -182,6 +182,7 @@ struct Harness {
   QString configHomeOverride;  // when set, the config home instead of `dir`
   int screenSettleMs = ShellHost::Options().screenSettleMs;
   int trimDelayMs = ShellHost::Options().trimDelayMs;
+  int windowGraceMs = ShellHost::Options().windowGraceMs;
 
   QString shellFile() const { return dir.filePath(QStringLiteral("shell.qml")); }
 
@@ -202,6 +203,7 @@ struct Harness {
     options.safeUrl = safeUrl;
     options.screenSettleMs = screenSettleMs;
     options.trimDelayMs = trimDelayMs;
+    options.windowGraceMs = windowGraceMs;
     options.hooks = native.hooks();
     const int count = screenCount;
     options.screens = [count] {

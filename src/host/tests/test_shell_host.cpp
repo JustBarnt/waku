@@ -1033,6 +1033,57 @@ void showLate(Harness& h, const char* name) {
 
 }  // namespace
 
+TEST(ShellHostTest, AReloadWhoseWindowsComeLaterKeepsTheShell) {
+  Harness h;
+  h.start(shellConfig(QStringLiteral("good")));
+  ASSERT_TRUE(h.host->reload());
+
+  write(h.shellFile(), lateWindowsShell());
+  QSignalSpy reloaded(h.host.get(), &ShellHost::reloaded);
+  ASSERT_TRUE(h.host->reload()) << qPrintable(h.host->error());
+  EXPECT_TRUE(h.host->error().isEmpty()) << qPrintable(h.host->error());
+  EXPECT_EQ(h.host->windows().size(), 0);
+  EXPECT_EQ(reloaded.count(), 0);  // the outcome waits for the first window
+  showLate(h, "late1");
+  ASSERT_TRUE(QTest::qWaitFor([&] { return reloaded.count() == 1; }, 2000));
+  EXPECT_TRUE(reloaded.at(0).at(0).toBool());
+  EXPECT_EQ(h.host->windows().size(), 1);
+  EXPECT_TRUE(h.host->error().isEmpty()) << qPrintable(h.host->error());
+}
+
+TEST(ShellHostTest, AReloadThatNeverMakesAWindowShowsTheFallbackAfterTheGrace) {
+  Harness h;
+  h.windowGraceMs = 100;
+  h.start(shellConfig(QStringLiteral("good")));
+  ASSERT_TRUE(h.host->reload());
+
+  write(h.shellFile(), lateWindowsShell());
+  QSignalSpy reloaded(h.host.get(), &ShellHost::reloaded);
+  ASSERT_TRUE(h.host->reload()) << qPrintable(h.host->error());
+  ASSERT_TRUE(QTest::qWaitFor([&] { return reloaded.count() == 1; }, 2000));
+  EXPECT_FALSE(reloaded.at(0).at(0).toBool());
+  EXPECT_TRUE(h.host->error().contains(QStringLiteral("no windows")))
+      << qPrintable(h.host->error());
+  ASSERT_EQ(h.host->windows().size(), 1);
+  EXPECT_EQ(h.text(QStringLiteral("a")), QStringLiteral("<missing>"));  // the fallback
+}
+
+TEST(ShellHostTest, AReloadDuringTheGraceStillWaitsForAWindow) {
+  Harness h;
+  h.windowGraceMs = 100;
+  h.start(shellConfig(QStringLiteral("good")));
+  ASSERT_TRUE(h.host->reload());
+  write(h.shellFile(), lateWindowsShell());
+  ASSERT_TRUE(h.host->reload());
+  ASSERT_TRUE(h.host->reload());  // replaces the wait, and must not pass as a first start
+
+  QSignalSpy reloaded(h.host.get(), &ShellHost::reloaded);
+  ASSERT_TRUE(QTest::qWaitFor([&] { return reloaded.count() == 1; }, 2000));
+  EXPECT_FALSE(reloaded.at(0).at(0).toBool());
+  EXPECT_TRUE(h.host->error().contains(QStringLiteral("no windows")))
+      << qPrintable(h.host->error());
+}
+
 TEST(ShellHostTest, WindowsThatAppearAfterInstallAreTrimmedOnceTheyStayStable) {
   Harness h;
   h.native.trimHook = true;
