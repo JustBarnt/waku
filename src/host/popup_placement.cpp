@@ -49,6 +49,33 @@ QPointF placePopup(const QRectF& anchor, const QSizeF& size, const QRectF& scree
   return {x, y};
 }
 
+namespace {
+
+// One axis of placePopupAtPoint: the start of a popup of `length` that grows from `point`.
+qreal fromPoint(qreal point, qreal length, PointGravity gravity, qreal low, qreal high) {
+  switch (gravity) {
+    case PointGravity::Before:
+      return pick(true, point - length, point, low, high);
+    case PointGravity::After:
+      return pick(false, point - length, point, low, high);
+    case PointGravity::Centre:
+      break;
+  }
+  return slide(point, length, low, high);
+}
+
+}  // namespace
+
+QPointF placePopupAtPoint(const QPointF& point, const QSizeF& size, const QRectF& screen,
+                          PointGravity horizontal, PointGravity vertical, qreal margin) {
+  const qreal minX = screen.left() + margin;
+  const qreal maxX = screen.right() - size.width() - margin;
+  const qreal minY = screen.top() + margin;
+  const qreal maxY = screen.bottom() - size.height() - margin;
+  return {fromPoint(point.x(), size.width(), horizontal, minX, maxX),
+          fromPoint(point.y(), size.height(), vertical, minY, maxY)};
+}
+
 PopupEdge popupEdgeForDock(std::optional<AppBarEdge> edge) {
   if (!edge) return PopupEdge::Below;
   switch (*edge) {

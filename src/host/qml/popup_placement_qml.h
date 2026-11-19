@@ -87,12 +87,34 @@ class PopupPlacement : public QObject {
   Q_INVOKABLE QRectF anchorRect(const QRectF& item, const QRectF& panel, bool vertical) const {
     return panelAnchorRect(item, panel, vertical);
   }
+
+  // placePopupAtPoint() with Quickshell's `gravity` (Edges flags): Left or Right grows that way
+  // from the point, Top or Bottom up or down, and an axis with neither is centred on the point.
+  // No flags at all is Quickshell's default, Bottom | Right.
+  static QPointF placeAtPoint(const QPointF& point, const QSizeF& size, const QRectF& screen,
+                              int gravity, qreal margin) {
+    if (gravity == Edges::None) gravity = Edges::Bottom | Edges::Right;
+    const auto axis = [gravity](int before, int after) {
+      if (gravity & before) return PointGravity::Before;
+      if (gravity & after) return PointGravity::After;
+      return PointGravity::Centre;
+    };
+    return placePopupAtPoint(point, size, screen, axis(Edges::Left, Edges::Right),
+                             axis(Edges::Top, Edges::Bottom), margin);
+  }
+
+  Q_INVOKABLE QPointF positionAtPoint(const QPointF& point, const QSizeF& size,
+                                      const QRectF& screen, int gravity, qreal margin) const {
+    return placeAtPoint(point, size, screen, gravity, margin);
+  }
 };
 
 // `anchor` of a PopupWindow (Quickshell `PopupAnchor`): what the popup opens next to.
 //   item     the item it belongs to
-//   rect     the part of `item` to open next to, in the item's coordinates; unset (empty): the
-//            item across the whole thickness of its window, so the popup opens outside the bar
+//   rect     the part of `item` to open next to, in the item's coordinates; unset: the item
+//            across the whole thickness of its window, so the popup opens outside the bar; set
+//            with no size (`anchor.rect.x` and `.y` only): a point, as in Quickshell, where the
+//            popup's corner goes; it grows from there as `gravity` says (down and right by default)
 //   edges    the side of `rect` it opens on (Edges flags): Top opens above, Bottom below, Left to
 //            the left, Right to the right
 //   gravity  the direction it grows from there; used for the side when `edges` names none
@@ -109,6 +131,7 @@ class PopupAnchor : public QObject {
   Q_PROPERTY(int edges READ edges WRITE setEdges NOTIFY changed FINAL)
   Q_PROPERTY(int gravity READ gravity WRITE setGravity NOTIFY changed FINAL)
   Q_PROPERTY(bool hasRect READ hasRect NOTIFY changed FINAL)
+  Q_PROPERTY(bool isPoint READ isPoint NOTIFY changed FINAL)
 
  public:
   explicit PopupAnchor(QObject* parent = nullptr) : QObject(parent) {}
@@ -121,7 +144,10 @@ class PopupAnchor : public QObject {
   }
   QRectF rect() const { return rect_; }
   void setRect(const QRectF& rect) {
-    if (rect_ == rect) return;
+    // A rect that is set counts even when it equals the default: `anchor.rect.x: 0` names the
+    // point (0, 0), not "no rect".
+    if (rectSet_ && rect_ == rect) return;
+    rectSet_ = true;
     rect_ = rect;
     emit changed();
   }
@@ -138,6 +164,9 @@ class PopupAnchor : public QObject {
     emit changed();
   }
   bool hasRect() const { return rect_.width() > 0 || rect_.height() > 0; }
+  // A rect that was set and has no size: a point, as in Quickshell. The popup's corner goes there
+  // and it grows the way `gravity` says (default down and to the right).
+  bool isPoint() const { return rectSet_ && !hasRect(); }
 
   // The PopupPlacement side `edges` and `gravity` ask for, or `fallback` when they name none.
   Q_INVOKABLE int placementEdge(int fallback) const {
@@ -160,6 +189,7 @@ class PopupAnchor : public QObject {
  private:
   QPointer<QQuickItem> item_;
   QRectF rect_;
+  bool rectSet_ = false;
   int edges_ = Edges::None;
   int gravity_ = Edges::None;
 };

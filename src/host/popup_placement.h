@@ -22,6 +22,18 @@ enum class PopupEdge { Below, Above, Right, Left };
 QPointF placePopup(const QRectF& anchor, const QSizeF& size, const QRectF& screen, PopupEdge edge,
                    qreal gap, qreal margin);
 
+// Which way a popup grows from an anchor point, on one axis (Quickshell `anchor.gravity`): before
+// the point (left of or above it), centred on it, or after it (right of or below it).
+enum class PointGravity { Before, Centre, After };
+
+// Where a popup anchored to a point goes (Quickshell's `anchor.rect` of size 0): its top-left
+// corner for a popup of `size` that grows from `point` as `horizontal` and `vertical` say, kept
+// `margin` inside `screen`. On each axis it flips to the other side of the point when its side has
+// no room, and is clamped into the screen when neither side fits. No gap: a point anchor names
+// where the popup's corner goes. All coordinates are logical pixels in the same (global) space.
+QPointF placePopupAtPoint(const QPointF& point, const QSizeF& size, const QRectF& screen,
+                          PointGravity horizontal, PointGravity vertical, qreal margin);
+
 // The side a popup opens on for a panel docked to `edge`: Top opens Below, Bottom Above, Left
 // Right, Right Left. A window that is not docked opens Below.
 PopupEdge popupEdgeForDock(std::optional<AppBarEdge> edge);

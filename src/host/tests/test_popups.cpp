@@ -224,6 +224,50 @@ TEST(PopupPlacementTest, TheQmlEdgeForADockMatches) {
 
 // ---- PopupWindow ----
 
+// ---- point anchors (Quickshell's anchor.rect of size 0) ----
+
+TEST(PopupPlacementTest, APointAnchorPutsTheCornerThereAndGrowsDownAndRight) {
+  const QPointF p =
+      PopupPlacement::placeAtPoint(QPointF(300, 50), kSize, kScreen, Edges::None, 8);
+  EXPECT_DOUBLE_EQ(p.x(), 300);
+  EXPECT_DOUBLE_EQ(p.y(), 50);
+}
+
+TEST(PopupPlacementTest, APointAnchorFollowsGravity) {
+  const QPointF upLeft = PopupPlacement::placeAtPoint(QPointF(500, 500), kSize, kScreen,
+                                                      Edges::Top | Edges::Left, 8);
+  EXPECT_DOUBLE_EQ(upLeft.x(), 300);
+  EXPECT_DOUBLE_EQ(upLeft.y(), 400);
+  // Only a vertical flag: centred horizontally on the point.
+  const QPointF centred =
+      PopupPlacement::placeAtPoint(QPointF(500, 500), kSize, kScreen, Edges::Bottom, 8);
+  EXPECT_DOUBLE_EQ(centred.x(), 400);
+  EXPECT_DOUBLE_EQ(centred.y(), 500);
+}
+
+TEST(PopupPlacementTest, APointAnchorFlipsAndClampsToStayOnScreen) {
+  // Below and right of (950, 750) there is no room: it grows up and to the left instead.
+  const QPointF flipped =
+      PopupPlacement::placeAtPoint(QPointF(950, 750), kSize, kScreen, Edges::None, 8);
+  EXPECT_DOUBLE_EQ(flipped.x(), 750);
+  EXPECT_DOUBLE_EQ(flipped.y(), 650);
+  // Too big for either side: clamped inside the margin.
+  const QPointF clamped = PopupPlacement::placeAtPoint(QPointF(500, 400), QSizeF(200, 700),
+                                                       kScreen, Edges::None, 8);
+  EXPECT_DOUBLE_EQ(clamped.y(), 800 - 700 - 8);
+}
+
+TEST(PopupAnchorTest, ARectSetWithoutASizeIsAPointEvenAtTheOrigin) {
+  PopupAnchor anchor;
+  EXPECT_FALSE(anchor.isPoint());  // never set: the item, as before
+  anchor.setRect(QRectF());        // `anchor.rect.x: 0` writes the default back
+  EXPECT_TRUE(anchor.isPoint());
+  EXPECT_FALSE(anchor.hasRect());
+  anchor.setRect(QRectF(0, 0, 20, 10));
+  EXPECT_FALSE(anchor.isPoint());
+  EXPECT_TRUE(anchor.hasRect());
+}
+
 TEST(PopupWindowTest, StartsClosed) {
   Harness h;
   h.start(popupConfig());
@@ -458,6 +502,46 @@ ShellRoot {
       QTest::qWaitFor([&] { return popup->width() == 120 && popup->height() == 50; }, 2000));
   EXPECT_EQ(popup->width(), 120);
   EXPECT_EQ(popup->height(), 50);
+}
+
+TEST(PopupWindowTest, APointAnchorOpensWithItsCornerAtThePoint) {
+  Harness h;
+  h.start(QStringLiteral(R"(
+import QtQuick
+import waku
+ShellRoot {
+    Panel {
+        thickness: 40
+        content: PanelLayout {
+            start: [
+                Item {
+                    id: anchorBox
+                    objectName: "anchor"
+                    width: 60
+                    height: 24
+                    PopupWindow {
+                        objectName: "pop"
+                        anchor.item: anchorBox
+                        anchor.rect.x: 10
+                        anchor.rect.y: 50
+                        Text { text: "hello"; color: "white"; font.pixelSize: 14 }
+                    }
+                }
+            ]
+        }
+    }
+}
+)"));
+  ASSERT_TRUE(started(h));
+  QQuickWindow* popup = findWindow(QStringLiteral("pop"));
+  QQuickItem* anchor = findItem(h.window(), QStringLiteral("anchor"));
+  ASSERT_NE(popup, nullptr);
+  ASSERT_NE(anchor, nullptr);
+  invoke(popup, "open");
+  const QPoint corner = anchor->mapToGlobal(QPointF(10, 50)).toPoint();
+  EXPECT_TRUE(QTest::qWaitFor([&] { return popup->position() == corner; }, 2000))
+      << "popup at " << popup->x() << "," << popup->y() << " expected " << corner.x() << ","
+      << corner.y();
 }
 
 TEST(PopupWindowTest, ItDoesNotOpenWithoutAnAnchor) {

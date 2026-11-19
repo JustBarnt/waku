@@ -53,6 +53,15 @@ Window {
         if (!item || !bar)
             return;
         const screenInfo = item.Screen;
+        const screenRect = Qt.rect(screenInfo.virtualX, screenInfo.virtualY, screenInfo.width, screenInfo.height);
+        if (anchor.isPoint) {
+            // Quickshell's point anchor: the popup's corner at the point, growing as gravity says.
+            const point = item.mapToGlobal(anchor.rect.x, anchor.rect.y);
+            const at = PopupPlacement.positionAtPoint(point, Qt.size(width, height), screenRect, anchor.gravity, margin);
+            x = at.x;
+            y = at.y;
+            return;
+        }
         let rect;
         if (anchor.hasRect) {
             const origin = item.mapToGlobal(anchor.rect.x, anchor.rect.y);
@@ -64,8 +73,7 @@ Window {
                                              Qt.rect(bar.x, bar.y, bar.width, bar.height),
                                              shellWindow ? shellWindow.dockVertical : false);
         }
-        const spot = PopupPlacement.position(rect, Qt.size(width, height),
-                                             Qt.rect(screenInfo.virtualX, screenInfo.virtualY, screenInfo.width, screenInfo.height),
+        const spot = PopupPlacement.position(rect, Qt.size(width, height), screenRect,
                                              anchor.placementEdge(defaultEdge()), gap, margin);
         x = spot.x;
         y = spot.y;
