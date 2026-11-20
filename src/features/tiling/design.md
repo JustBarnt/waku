@@ -150,23 +150,36 @@ a title-bar drag of a managed window ends by where the cursor is when the button
 |---|---|
 | another tile that holds one window | the two tiles trade places (`TilingModel::swap`) |
 | a tile that holds a stack | the window joins that stack and becomes its top (`TilingModel::stackOnto`) |
-| its own tile, a gap, or another monitor | it goes back to its tile (a retile) |
-| anywhere, with Shift held | it floats, as with `"float"` |
+| its own tile or a gap | it goes back to its tile (a retile) |
+| another monitor | it joins that monitor's layout at the end, as a new window would (`TilingModel::add`) |
+| anywhere, with the float key held | it floats, as with `"float"` |
 
+- The float key is `Tiling.dragFloatModifier`: `"ctrl"` (default), `"alt"` or `"shift"`. Ctrl is
+  the default because Windows and PowerToys leave it free during a title-bar drag: PowerToys
+  FancyZones shows its zones while Shift is held in a drag, and PowerToys Grab And Move starts a
+  drag with Alt + left click (such a drag may not be a system move loop, so the tiler may not see
+  it at all). Alt also opens the menu bar of classic apps when it is released.
 - `swap` trades whole slots: dragging the top window of a stack onto a single tile carries the
   stack with it, as `wakuc tile move` does. `stackOnto` moves only the dragged window; the stack it
   leaves shows its next window.
+- A drop on a single tile always swaps; there is no drag that makes a new stack. Stacks are made
+  with the `tile` commands and keybinds, as today.
+- Another monitor is the monitor under the cursor at release. Only the dragged window moves: it
+  leaves its stack (the stack shows its next window) and is appended to the workspace of that
+  monitor on the shown desktop. `TilingModel::add` already removes the window from its old
+  workspace and appends it, and `retile` already re-homes a window found on another monitor
+  (moved by a hotkey or a script), so this is the same path started at `MoveSizeEnd`. Dropping at
+  a chosen spot in the other monitor's layout is left for later (Open questions).
 - A drag that Windows ends with a Snap (released at a screen edge, Windows resizes it) floats the
   window as today: `MoveSizeEnd` finds the size changed, which is not a swap. See Snap.
 - Resize drags are unchanged: in `mainStack` they move the shared edges (ratio and weights).
-- Not in the first version: another monitor (released there, the window goes back), monocle (a
-  drag of the monocle window floats it or goes back, as today), a paused tiler (nothing is placed,
-  so a drag floats as today).
+- Not in the first version: monocle (a drag of the monocle window floats it or goes back, as
+  today), a paused tiler (nothing is placed, so a drag floats as today).
 
 ### Live drop indicator
 
-While the window moves, the tile it would land in is shown, marked by the result (swap, join stack,
-float with Shift, back to its tile).
+While the window moves, where it would land is shown, marked by the result (swap, join stack,
+another monitor, float with the float key, back to its tile).
 
 - **Location events for move drags.** `TilingHooks::trackLocation` follows one window, today only a
   `mainStack` resize drag (`tracksMouseResize`). It follows every managed window in a title-bar
@@ -174,45 +187,47 @@ float with Shift, back to its tile).
   removed at `MoveSizeEnd`, at destroy and at stop.
 - **Target in the engine.** At `MoveSizeStart` the engine keeps the workspace's tile rectangles
   (`slotsFor` over `activeWindows`), as the resize drag does. Each `LocationChange` reads the
-  cursor and finds the tile under it; only a change of target or result goes out. The same lookup
-  decides the drop at `MoveSizeEnd`, so what is shown is what happens.
+  cursor and finds the tile under it, or the other monitor's work area; only a change of target or
+  result goes out. The same lookup decides the drop at `MoveSizeEnd`, so what is shown is what
+  happens.
 - **New placer calls.** `WindowPlacer::cursorPosition()` (`GetCursorPos`, physical pixels like the
-  work area and the slots) and `WindowPlacer::modifiers()` (`GetAsyncKeyState` for Shift). The
-  fake placer gets settable fields for both.
-- **To QML.** `Tiling.dropTarget`: `{ active, kind ("swap", "stack", "float", "back"), x, y,
-  width, height, screen }` in the logical coordinates of the screen it is on, with a change signal.
-  Physical to logical goes through the screen that holds the monitor: `QScreen::geometry()` keeps
-  the physical origin with logical size, as in `physicalScreenRect` (host/app_bar), so per-monitor
-  scale is handled there.
-- **Drawing.** Two ways, to decide before code:
-  - a ready-made QML component (`TilingDropIndicator`): a click-through, never-focused window per
-    screen on the overlay layer that draws `dropTarget`, which a shell adds to its `ShellRoot`.
-    Every shell gets the indicator with one line; whether a feature may ship a window component
-    must be checked against the structure rules in `docs/architecture.md`;
-  - only the property, and each shell draws its own (Octalia in `MainScreen`, which already covers
-    the screen and has a click-through mask). Fits a shell's look; each shell does the work.
+  work area and the slots), `WindowPlacer::monitorAt(point)` (`MonitorFromPoint`) and
+  `WindowPlacer::modifiers()` (`GetAsyncKeyState` for Ctrl, Alt and Shift). The fake placer gets
+  settable fields for all three.
+- **To QML.** `Tiling.dropTarget`: `{ active, kind ("swap", "stack", "monitor", "float", "back"),
+  x, y, width, height, screen }` in the logical coordinates of the screen it is on, with a change
+  signal. For `"monitor"` the rectangle is that monitor's work area. Physical to logical goes
+  through the screen that holds the monitor: `QScreen::geometry()` keeps the physical origin with
+  logical size, as in `physicalScreenRect` (host/app_bar), so per-monitor scale is handled there.
+- **Drawing.** waku ships a ready-made component, `TilingDropIndicator` (`tiling/qml/`), that a
+  shell adds to its `ShellRoot` with one line. It is a `PanelWindow` per screen on the Overlay
+  layer, click-through and never focused, that draws `dropTarget` when `active` and its `screen`
+  is this one, and is hidden otherwise. A feature may ship window QML: its QML uses the `host`
+  types (`docs/architecture.md`), as `ControlCenter.qml` and `Volume.qml` do. Colours and
+  rounding are properties with defaults from `Theme`, so a shell can restyle it; a shell that
+  wants its own drawing can skip the component and read `dropTarget` itself.
 
 ### Changes by part
 
 | Part | Change |
 |---|---|
 | `tiling_engine.*` | a move-drag state next to `ResizeDrag` (key, tiles at start, current target); `onLocationChange` for move drags; the drop in `onMoveSizeEnd` instead of `setFloating`; a callback for target changes |
-| `window_placer.h`, `win32/window_placer_win.cpp`, `testing/fake_window_placer.h` | `cursorPosition`, `modifiers` |
-| `qml/tiling_service.*` | `dragAction`, `dropTarget` and its signal, the physical to logical mapping, `trackLocation` for move drags |
-| tests | swap, join a stack, own tile, gap, Shift, a Snap, a stack carried by a swap, another monitor, target changes during a drag, hook removed at the end |
-| docs | this section becomes the description; `docs/wiki/wakuc.md` gets the option |
+| `window_placer.h`, `win32/window_placer_win.cpp`, `testing/fake_window_placer.h` | `cursorPosition`, `monitorAt`, `modifiers` |
+| `qml/tiling_service.*` | `dragAction`, `dragFloatModifier`, `dropTarget` and its signal, the physical to logical mapping, `trackLocation` for move drags |
+| `qml/TilingDropIndicator.qml` | the indicator window |
+| tests | swap, join a stack, own tile, gap, float key (each of the three), a Snap, a stack carried by a swap, another monitor (appended, its old stack shows the next window), target changes during a drag, hook removed at the end |
+| docs | this section becomes the description; `docs/wiki/wakuc.md` gets the options and the component |
+| waku-octalia | one `TilingDropIndicator {}` in `shell.qml`, and the options in its tiling settings if wanted |
 
 Rough size: the engine, placer and service with tests about 300 to 450 lines; the indicator
-component or the Octalia drawing about 100 more.
+component about 100 more.
 
 ### Open questions
 
-- Shift or Alt for float: check what Windows 11 itself does with each held during a title-bar drag
-  (Snap Layouts) before choosing.
-- A modifier to join a single tile as a new stack (today a drop on a single tile swaps).
 - Whether `"swap"` should also apply to windows the tiler floats by rule (no: they are not tiles).
-- Another monitor in a later version: needs an insert at a position in `TilingModel` (today `add`
-  appends) and the target monitor's tiles.
+- After the base feature is stable: dropping onto another monitor at the spot under the cursor,
+  instead of at the end. Needs an insert at a position in `TilingModel` (today `add` appends) and
+  the target monitor's tiles in the drag state.
 
 ## Snap
 
