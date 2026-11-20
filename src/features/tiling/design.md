@@ -39,9 +39,9 @@ through `Scheduler`.
 
 One out-of-context range hook per group (`kernel::WinEventHook`): destroy, show and hide; name
 change; cloak and uncloak; minimize start and end; move and size start and end; foreground.
-Location change is hooked only during a managed `mainStack` drag or a drag under
-`Tiling.dragAction: "swap"`, and its callback forwards only the dragged window. The hook filters `idObject == OBJID_WINDOW`, `idChild == 0` and
-`GetAncestor(GA_ROOT) == hwnd` (not for destroy: a destroyed window has no ancestor). Events from
+Location change is hooked only during a managed drag in a layout that resizes by mouse or under
+`Tiling.dragAction: "swap"`, and its callback forwards only the dragged window. The hook filters
+`idObject == OBJID_WINDOW`, `idChild == 0` and `GetAncestor(GA_ROOT) == hwnd` (not for destroy: a destroyed window has no ancestor). Events from
 waku's own process are skipped by the hook (`WINEVENT_SKIPOWNPROCESS`).
 
 - **A new window.** `Show` arrives before the final title and size. The engine evaluates one
@@ -59,13 +59,12 @@ waku's own process are skipped by the hook (`WINEVENT_SKIPOWNPROCESS`).
   that already is on the allowlist) and retiles the new desktop. No timer.
 - **User intent.** `MoveSizeStart` remembers the bounds. A title-bar translation floats the
   window at `MoveSizeEnd` (with `Tiling.dragAction: "swap"` it drops it instead, see Drag to
-  swap). In `mainStack`, a size change remains tiled: a drag of the main/stack
-  divider updates the workspace ratio, and a drag of a divider between stacked windows
-  updates the adjacent slots' weights. Both updates retile neighboring windows
-  while the dragged window is held, so it cannot feed its own placement back into the resize.
-  Flipped layouts use the same shared edges. Outer edges stay constrained to the work area, gaps
-  remain intact, and the window is placed back into its final slot on release. Other layouts keep
-  the prior move/resize-floats behavior. A clamped window is compared against the bounds it had at
+  swap). In `mainStack`, `columns`, `rows` and `centerMain`, a size change remains tiled and moves
+  the boundary it was dragged on (see Mouse resize). The neighbours are retiled while the dragged
+  window is held, so it cannot feed its own placement back into the resize. Flipped layouts use
+  the same shared edges. Outer edges stay constrained to the work area, gaps remain intact, and the
+  window is placed back into its final slot on release. Other layouts keep the prior
+  move/resize-floats behavior. A clamped window is compared against the bounds it had at
   the start. Cancellation restores the starting sizing; destroy, stop and cancellation clear
   the active resize tracking.
 
@@ -237,111 +236,78 @@ contents while dragging" on (the default); without it the target is decided at t
   instead of at the end. Needs an insert at a position in `TilingModel` (today `add` appends) and
   the target monitor's tiles in the drag state.
 
-## Mouse resize in more layouts (planned)
+## Mouse resize
 
-Not built yet; the plan to review before any code. Today a border drag keeps the window tiled only
-in `mainStack` (see Events, "User intent"); in every other layout it floats the window. This plan
-brings `columns`, `rows` and `centerMain` to the same behaviour. `mainStackTop`, `bsp` and `grid`
-keep floating on a resize (see Later).
+A border drag keeps the window tiled in `mainStack`, `columns`, `rows` and `centerMain`
+(`TilingEngine::resizesByMouse`); in `mainStackTop`, `bsp` and `grid` it floats the window (see
+Later).
 
 ### Behaviour
 
 A drag of an inner edge (one that another tile shares) moves the boundary between the tiles that
-share it, live, as in `mainStack` today. An outer edge (on the work area) snaps back at the
-release, a corner drag changes both of its edges, and a cancelled drag restores the sizes it
-started with.
+share it, live: the other windows are placed again while the dragged one is held. An outer edge
+(on the work area) goes back at the release, a corner drag changes both of its edges, and a
+cancelled drag (Esc) restores the sizes it started with.
 
 | Layout | Edge dragged | What changes |
 |---|---|---|
-| `mainStack` | between the main window and the stack | `ratio` (unchanged) |
-| | between two stacked windows | their height weights (unchanged) |
+| `mainStack` | between the main window and the stack | `ratio` |
+| | between two stacked windows | their height weights |
 | `columns` | between two columns | the width weights of the two |
 | `rows` | between two bands | the height weights of the two |
 | `centerMain` (3 windows or more) | either side of the main window, or the inner edge of a side window | `ratio` |
 | | between two windows of the same side column | their height weights |
 | `centerMain` (2 windows) | as `mainStack`, which is what `layoutSlots` draws for two | |
 
-- Weights work as the `mainStack` stack's do: a pair trades share and keeps its sum, each weight
-  stays in `kMinWeight..kMaxWeight` (0.3..3), and the others in the row or column do not move.
+- A pair trades share and keeps its sum, each weight stays in `kMinWeight..kMaxWeight` (0.3..3),
+  and the other windows of the row or column do not move.
 - `centerMain` stays symmetric: one `ratio` sizes the main window and the two side columns stay
-  equally wide. Dragging the main window's right edge out by d widens it by 2d: its left edge moves
-  out by d as well. This is what `ratio` already means for the layout, and `tile resize horizontal`
-  keeps working on it.
-- `tile resize` comes along: `horizontal` grows or shrinks the focused window's width weight in
-  `columns`, `vertical` its height weight in `rows` and in a side column of `centerMain` (step 0.1),
-  so the "does not resize" error stays only for `grid`.
+  equally wide. Dragging the main window's right edge out by d widens it by 2d; its left edge moves
+  out by d as well.
+- A drag that moves both edges of an axis at once is not a border drag: it is Windows placing the
+  window, a Snap at the release (`ResizeDrag::snapped`). The sizes go back to where they were and
+  the window floats, as after a move.
+- `tile resize` follows the same settings: `horizontal` is the focused window's width weight in
+  `columns`, `vertical` its height weight in `rows` and in a side column of `centerMain`, and the
+  ratio elsewhere as before. Only `grid` answers "does not resize".
 
-### Layouts
+### Sizes and layouts
 
-- `layoutSlots` gets weights in all three: `columns` and `rows` use `weightedSpans` over every
-  window (the main window included, unlike `mainStack`), and `centerMainSlots` uses it for each side
-  column, with the weights of the windows in that column. Even weights keep the equal `spans` path,
-  so nothing moves for a workspace that was never resized.
-- Weights are stored per layout: `WorkspaceView::weights` becomes a map from the canonical layout
-  name to the per-window weights. A `mainStack` height weight would otherwise be read as a column
-  width after `tile layout columns`, and each layout keeps its sizes when the workspace switches
-  back to it. `ratio` stays one value per workspace, as today (it means the main share in both
-  `mainStack` and `centerMain`).
-- Weights belong to windows, as in `mainStack` now: a window moved by `tile move` or a swap drag
-  takes its width or height with it, and a closed window's weight goes with it.
+- `layoutSlots` reads weights in all four: `columns` and `rows` over every window (the main window
+  included, unlike `mainStack`), `centerMain` per side column with the weights of the windows in it.
+  Equal weights keep the plain `spans`, so nothing moves in a workspace that was never resized.
+- Sizes given by hand belong to the layout they were given in. When a workspace's layout changes
+  (`tile layout`, the cycle, or a new `Tiling.layout` for the workspaces that follow it), its ratio
+  and weights are dropped (`TilingModel::resetSizes`) and the new layout starts from its defaults.
+  Flips and monocle stay. Setting the layout it already has changes nothing.
+- Weights belong to windows, as in `mainStack`: a window moved by `tile move` or a swap drag takes
+  its width or height with it, and a closed window's weight goes with it.
 
 ### Engine
 
-`onLocationChange` has the `mainStack` geometry written out: "the main boundary moves `ratio`",
-"the edge to the stacked window above or below moves the pair's weights". It becomes two
-primitives and a per-layout table that says which applies to which edge:
+`onLocationChange` takes each moved edge of the dragged slot (start slots from `slotsFor`, so
+flips are already in them) and:
 
-- **Neighbour across an edge.** For a moved edge of the dragged slot, the slot on the other side:
-  the one a gap away from that edge (within the tolerance) that overlaps it on the other axis. This
-  replaces the "above / below" search, which only works because a `mainStack` has one column of
-  stacked windows; `centerMain` has two, so the overlap check keeps a window of the other column
-  out. The slots are the ones `slotsFor` gave at `MoveSizeStart` (flips applied), so a flipped
-  layout needs nothing more.
-- **Pair weights along an axis.** The current weight code, given the axis (width or height): the
-  pair's share from where the dragged edge is now, clamped, written to the layout's weights.
-- **Ratio from an edge.** `mainStack`: the current formula. `centerMain`: the main width that puts
-  the dragged edge where it is with the sides equal, `2 * (edge - (inner.x + gap)) - usable` for
-  the right edge and its mirror for the left, over `usable`, clamped to 0.1..0.9.
-- **Which applies.** By the canonical layout and the window count (`centerMain` with two windows
-  is `mainStack`): a vertical edge in `columns` and a horizontal one in `rows` are pair weights; in
-  `centerMain` a vertical edge is the ratio and a horizontal one is pair weights within the column.
-- `onMoveSizeStart` creates the `ResizeDrag` in the four layouts instead of `mainStack` only, and
-  the cancel snapshot is the workspace's ratio and the weights of the layout in force.
+- **finds the slot across it** (`slotAcross`): a gap away from that edge, within the tolerance,
+  and overlapping it along it (the most, when several do). None: an outer edge. The overlap keeps
+  a window of the other side column of `centerMain` out;
+- **asks the layout what the edge is** (`edgeRole`, by the layout as drawn: `centerMain` with two
+  windows is `mainStack`): a side of the main window is the ratio, an edge between two windows of
+  a column or a row is the pair's weights;
+- **ratio** (`ratioFromEdge`): `mainStack`, the main width over the width left by the gaps;
+  `centerMain`, the main width that keeps it centred, `2 * (edge - (inner.x + gap)) - usable` for
+  its right edge and the mirror for its left, over `usable`; clamped to 0.1..0.9;
+- **weights** (`shareEdge`): the share the pair needs for the edge to be where it is now.
 
 A numeric search was weighed (re-run `layoutSlots` and bisect the setting until the edge lands
-under the cursor): it would cover every layout with less code each, but for these three layouts
-the two primitives are shorter and easier to read, and the search can still come later for `bsp`
-and `grid`.
-
-### Where it lives
-
-| Part | Change |
-|---|---|
-| `layouts.*` | weights for `columns`, `rows` and the `centerMain` side columns |
-| `tiling_model.*` | weights per layout name in `WorkspaceView` |
-| `tiling_engine.*` | the neighbour, pair-weight and ratio primitives; the per-layout table; `ResizeDrag` in four layouts; `resize` for the new layouts |
-| tests | per layout: each kind of inner edge, an outer edge, a corner, a flip, a cancel; `centerMain` with two windows; a symmetric `centerMain` ratio; weights kept per layout across a layout switch; `tile resize` in the new layouts |
-| docs | this section becomes the description; Layouts and `tile resize` above; `docs/wiki/wakuc.md` |
-
-Rough size: layouts and model about 80 lines, the engine about 150 (much of it moved from the
-current `mainStack` code), tests about 250 to 300.
-
-### Decisions to confirm
-
-1. `centerMain` symmetric (one `ratio`), as above, or each side with a share of its own, so a drag
-   moves only the edge you hold. Symmetric is recommended: it is what the layout means today and
-   keyboard resize already works on it.
-2. Weights remembered per layout (recommended) or cleared when a workspace's layout changes.
-3. `tile resize` extended to the new layouts (recommended), or the mouse only.
-4. Weights follow their windows on a move or a swap (recommended; as `mainStack` does), or stay
-   with the position.
+under the cursor): it would cover every layout with less code each, but for these the two
+primitives are shorter and easier to read. It may suit `bsp` and `grid` later.
 
 ### Later
 
-- `mainStackTop`: the `mainStack` table turned on its side, with weights on the bottom row. Cheap
-  once the primitives exist.
+- `mainStackTop`: the `mainStack` table turned on its side, with weights on the bottom row.
 - `bsp` and `grid`: new kinds of setting (a share per cut, row and column weights) and decisions of
-  their own; the numeric search fits them better.
+  their own.
 
 ## Snap
 
@@ -376,15 +342,15 @@ bsp                  grid                 centerMain
 +-----+--+--+        +-----+-----+        +----+-------+----+
 ```
 
-- `mainStack`: main left, the rest stacked right. The only layout with height weights.
+- `mainStack`: main left, the rest stacked right, sized against each other by height weights.
 - `mainStackTop`: main on top, the rest side by side below.
-- `columns`, `rows`: equal columns or bands; they do not resize.
+- `columns`, `rows`: columns or bands, equal until resized (width or height weights).
 - `bsp`: window 1 takes `ratio` of the width; every next window takes the top (then left, then
   top...) half of what is left. 
 - `grid`: ceil(sqrt(n)) columns filled by row; a short last row spreads over the width. Does not
   resize.
-- `centerMain`: main in the middle; the others alternate right, left, right... in two columns.
-  With two windows it is `mainStack`.
+- `centerMain`: main in the middle; the others alternate right, left, right... in two columns,
+  each sized by its windows' height weights. With two windows it is `mainStack`.
 
 `wakuc tile ...` acts on the foreground window (`TilingControl`, `tiling_command.h`; the service
 answers `ok: ...` or `error: ...`). The pure logic is in `layouts.cpp` (`flipSlots`,
@@ -397,9 +363,11 @@ answers `ok: ...` or `error: ...`). The pure logic is in `layouts.cpp` (`flipSlo
 - `move <direction>`: swaps the focused window with that neighbour in the stack order and
   retiles. `promote`: the focused window takes slot 0 (unchanged if it already has it).
 - `resize horizontal`: changes the `ratio` of the layout by 5% per call (a stack window
-  that grows takes width from the main window), clamped to 0.1..0.9, per workspace. `vertical`: a
-  height weight (step 0.1, 0.3..3) for a stacked window of `mainStack`, so it needs three or more
-  windows. `columns`, `rows` and `grid` do not resize. A change of `Tiling.ratio` clears the overrides.
+  that grows takes width from the main window), clamped to 0.1..0.9, per workspace; in `columns` it
+  is the focused window's width weight. `vertical`: a height weight (step 0.1, 0.3..3) for a
+  stacked window of `mainStack` (three or more windows), a band of `rows` or a window of a
+  `centerMain` side column that holds two or more. `grid` does not resize. A change of
+  `Tiling.ratio` clears the overrides; a change of layout drops the workspace's sizes.
 - `flip horizontal|vertical`: mirrors the slots of the layout in the work area; again undoes it.
 - `monocle`: the focused window gets the whole work area (inside the gap); the other windows are
   not touched, so they stay behind it. Again re-tiles. A monocle window that leaves the

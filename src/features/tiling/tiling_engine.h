@@ -129,8 +129,11 @@ class TilingEngine {
   bool running() const { return running_; }
 
   void handle(const WindowEvent& event);
-  // True only while a managed mainStack window is being interactively resized.
+  // True only while a managed window of a layout that resizes by mouse (resizesByMouse) is being
+  // dragged by its border or title bar.
   bool tracksMouseResize(WindowId hwnd) const { return resizeDrags_.count(hwnd) != 0; }
+  // The layouts where a border drag resizes the tiles instead of floating the window.
+  static bool resizesByMouse(const QString& layout);
   // True while the engine wants the location events of the window: a mainStack resize or a drag
   // under DragAction::Swap.
   bool tracksLocation(WindowId hwnd) const {
@@ -176,9 +179,11 @@ class TilingEngine {
   // Brings the next (`step` > 0) or previous window of the focused window's stack to the top and
   // activates it.
   CommandResult cycleStack(int step);
-  // Grows (`sign` > 0) or shrinks the focused window along `axis` by one step. Horizontal moves
-  // the main/stack boundary of mainStack (kRatioStep); vertical changes the height share of a
-  // stacked window (kWeightStep). Per workspace; clamped.
+  // Grows (`sign` > 0) or shrinks the focused window along `axis` by one step: the ratio
+  // (kRatioStep) where the main window's share is along that axis (mainStack, centerMain, ...),
+  // otherwise the window's weight against its neighbours (kWeightStep): its width in columns, its
+  // height in rows, in the stack of mainStack and in a side column of centerMain. Per workspace;
+  // clamped. grid does not resize.
   CommandResult resize(Axis axis, int sign);
   // Mirrors the layout of the focused window's workspace; again undoes it.
   CommandResult flip(Axis axis);
@@ -275,6 +280,9 @@ class TilingEngine {
   std::map<WindowId, QRect> floatRects_;
   struct ResizeDrag {
     WorkspaceKey key;
+    QString layout;  // canonical, at the start
+    // Both edges of an axis moved at once: Windows placed it (a Snap at the release). It floats.
+    bool snapped = false;
     QRect startRect;
     QRect area;
     std::vector<WindowId> active;

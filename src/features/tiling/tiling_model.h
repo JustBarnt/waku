@@ -27,11 +27,11 @@ struct WorkspaceKey {
 // The per-workspace adjustments the `tile` commands make, on top of the layout. A workspace with
 // none has the defaults.
 struct WorkspaceView {
-  std::optional<double> ratio;         // overrides the default main share of mainStack
+  std::optional<double> ratio;         // overrides the default share of the main window
   bool flipHorizontal = false;         // mirror left to right
   bool flipVertical = false;           // mirror top to bottom
   WindowId monocle = 0;                // the window that fills the work area; 0 for none
-  std::map<WindowId, double> weights;  // height weights of the stacked windows (default 1)
+  std::map<WindowId, double> weights;  // a window's share against its neighbours (default 1)
 };
 
 // One slot of a layout. Usually one window; windows that were stacked onto it share it, and only
@@ -91,6 +91,9 @@ class TilingModel {
   WorkspaceView& edit(const WorkspaceKey& key) { return views_[key]; }
   // Forgets every ratio override (the default ratio changed).
   void clearRatios();
+  // Forgets the sizes a workspace was given by hand, its ratio and weights: its layout changed, and
+  // the new one starts from its defaults. Flips and monocle stay.
+  void resetSizes(const WorkspaceKey& key);
 
   // Exchanges the slots of two windows of one workspace (a stack moves as a whole); false when
   // they are not in the same workspace or share a slot.

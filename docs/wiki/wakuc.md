@@ -200,9 +200,13 @@ keeps its work-area reservation while fullscreen is active, avoiding a desktop r
 alt-tab or minimize the fullscreen window. Exit native fullscreen with the application's own
 shortcut to return to tiling.
 
-In `mainStack`, drag a window border or corner to resize its tile. Neighbors follow shared-divider
-changes during the drag. Outer edges snap back into the work area on release. Dragging the title
-bar floats the window by default; other layouts retain their move/resize-to-float behavior.
+In `mainStack`, `columns`, `rows` and `centerMain`, drag a window border or corner to resize its
+tile. Neighbors follow shared-divider changes during the drag. In `centerMain` the main window
+stays centered: dragging one of its sides moves the other side too, and the windows of each side
+column resize against each other by height. Outer edges snap back into the work area on release.
+A Windows Snap at a screen edge floats the window. Sizes you give a layout are dropped when the
+workspace switches to another layout. Dragging the title bar floats the window by default; in
+`mainStackTop`, `bsp` and `grid` a resize also floats it.
 
 To rearrange tiles with the mouse instead, set `Tiling.dragAction` to `"swap"`. A title-bar drag
 then drops the window where you release it:
@@ -258,8 +262,9 @@ wakuc tile minimize
   slot.
 - `stack` joins the focused window to the neighbouring slot. `unstack` gives it a separate slot.
   `cycle-stack` selects the next or previous window in its stack.
-- `resize` changes the layout's horizontal split or, where supported, a stack window's vertical
-  weight. Not every layout supports resizing.
+- `resize` changes the layout's horizontal split, or the focused window's share against its
+  neighbours: its width in `columns`, its height in `rows`, in the `mainStack` stack and in a
+  `centerMain` side column. `grid` does not resize.
 - `flip` mirrors the layout. `monocle` toggles a full-work-area slot. `pause` pauses or resumes
   placement.
 - `close` requests that the foreground window close; it may prompt to save. `minimize` minimizes

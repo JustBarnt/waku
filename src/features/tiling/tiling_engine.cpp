@@ -69,6 +69,149 @@ QString dropKindName(DropKind kind) {
   return QString();
 }
 
+// --- resizing by mouse
+
+enum class Edge { Left, Right, Top, Bottom };
+
+bool isVertical(Edge edge) { return edge == Edge::Left || edge == Edge::Right; }
+
+// The position of an edge, exclusive on the right and at the bottom.
+int edgeAt(const QRect& r, Edge edge) {
+  switch (edge) {
+    case Edge::Left:
+      return r.x();
+    case Edge::Right:
+      return r.x() + r.width();
+    case Edge::Top:
+      return r.y();
+    case Edge::Bottom:
+      return r.y() + r.height();
+  }
+  return 0;
+}
+
+// The slot on the other side of `edge` of slot `index`: a gap away from that edge and overlapping
+// it along it (the most, when several do: the main window's edge faces every stacked window).
+// Nothing for an outer edge.
+std::optional<size_t> slotAcross(const std::vector<QRect>& rects, size_t index, Edge edge,
+                                 int gap) {
+  const QRect& s = rects[index];
+  std::optional<size_t> best;
+  int bestOverlap = 0;
+  for (size_t i = 0; i < rects.size(); ++i) {
+    if (i == index) continue;
+    const QRect& t = rects[i];
+    int distance = 0;
+    switch (edge) {
+      case Edge::Left:
+        distance = s.x() - (t.x() + t.width());
+        break;
+      case Edge::Right:
+        distance = t.x() - (s.x() + s.width());
+        break;
+      case Edge::Top:
+        distance = s.y() - (t.y() + t.height());
+        break;
+      case Edge::Bottom:
+        distance = t.y() - (s.y() + s.height());
+        break;
+    }
+    const int overlap =
+        isVertical(edge) ? std::min(s.y() + s.height(), t.y() + t.height()) - std::max(s.y(), t.y())
+                         : std::min(s.x() + s.width(), t.x() + t.width()) - std::max(s.x(), t.x());
+    if (std::abs(distance - gap) > kMovedTolerance || overlap <= 0) continue;
+    if (!best || overlap > bestOverlap) {
+      best = i;
+      bestOverlap = overlap;
+    }
+  }
+  return best;
+}
+
+// What a drag of an inner edge changes: the workspace's ratio, or the weights of the two windows
+// that share the edge.
+enum class EdgeRole { None, Ratio, Weights };
+
+// `shape` is the layout as drawn: centerMain with two windows is mainStack.
+QString resizeShape(const QString& layout, size_t count) {
+  if (layout == QLatin1String("centerMain") && count < 3) return QStringLiteral("mainStack");
+  return layout;
+}
+
+EdgeRole edgeRole(const QString& shape, size_t index, size_t other, Edge edge) {
+  if (shape == QLatin1String("mainStack") || shape == QLatin1String("centerMain")) {
+    // The main window's sides are the ratio; the edges between two windows of a column, weights.
+    if (index == 0 || other == 0) return isVertical(edge) ? EdgeRole::Ratio : EdgeRole::None;
+    return isVertical(edge) ? EdgeRole::None : EdgeRole::Weights;
+  }
+  if (shape == QLatin1String("columns"))
+    return isVertical(edge) ? EdgeRole::Weights : EdgeRole::None;
+  if (shape == QLatin1String("rows")) return isVertical(edge) ? EdgeRole::None : EdgeRole::Weights;
+  return EdgeRole::None;
+}
+
+// The ratio that puts the dragged edge at `at`. The edge is the main window's own (`draggedIsMain`)
+// or that of a window across from it, a gap away. mainStack: the main width over the width left
+// by the gaps. centerMain: the main window stays centred with equal sides, so its width is twice
+// the distance from the centre to the edge.
+std::optional<double> ratioFromEdge(const QString& shape, const QRect& area, int gap,
+                                    bool draggedIsMain, Edge edge, int at) {
+  const bool mainRight = draggedIsMain ? edge == Edge::Right : edge == Edge::Left;
+  const int mainEdge = draggedIsMain ? at : (edge == Edge::Left ? at - gap : at + gap);
+  const int innerLeft = area.x() + gap;
+  const int innerRight = area.x() + area.width() - gap;
+  int usable = 0;
+  int mainWidth = 0;
+  if (shape == QLatin1String("centerMain")) {
+    usable = innerRight - innerLeft - 2 * gap;
+    mainWidth = mainRight ? 2 * (mainEdge - innerLeft - gap) - usable
+                          : usable - 2 * (mainEdge - innerLeft - gap);
+  } else {
+    usable = innerRight - innerLeft - gap;
+    mainWidth = mainRight ? mainEdge - innerLeft : innerRight - mainEdge;
+  }
+  if (usable <= 0) return std::nullopt;
+  return std::clamp(static_cast<double>(mainWidth) / usable, 0.1, 0.9);
+}
+
+// The weights of the pair `a` (the dragged window, in `slot`) and `b` (in `otherSlot`) that put the
+// shared edge at `at`. The pair keeps its sum and each stays inside the engine's bounds. False
+// when nothing changes.
+bool shareEdge(WorkspaceView& view, WindowId a, WindowId b, const QRect& slot,
+               const QRect& otherSlot, Edge edge, int at) {
+  const int pairLength =
+      isVertical(edge) ? slot.width() + otherSlot.width() : slot.height() + otherSlot.height();
+  if (pairLength <= 1) return false;
+  int wanted = 0;
+  switch (edge) {
+    case Edge::Left:
+      wanted = slot.x() + slot.width() - at;
+      break;
+    case Edge::Right:
+      wanted = at - slot.x();
+      break;
+    case Edge::Top:
+      wanted = slot.y() + slot.height() - at;
+      break;
+    case Edge::Bottom:
+      wanted = at - slot.y();
+      break;
+  }
+  const double current = view.weights.count(a) ? view.weights.at(a) : 1.0;
+  const double other = view.weights.count(b) ? view.weights.at(b) : 1.0;
+  const double pair = current + other;
+  const double fraction = static_cast<double>(std::clamp(wanted, 1, pairLength - 1)) / pairLength;
+  const double low = std::max(TilingEngine::kMinWeight, pair - TilingEngine::kMaxWeight);
+  const double high = std::min(TilingEngine::kMaxWeight, pair - TilingEngine::kMinWeight);
+  if (low > high) return false;
+  const double next = std::clamp(pair * fraction, low, high);
+  const double nextOther = pair - next;
+  if (std::abs(next - current) <= 0.0001 && std::abs(nextOther - other) <= 0.0001) return false;
+  view.weights[a] = next;
+  view.weights[b] = nextOther;
+  return true;
+}
+
 // Where a window that is floated out of its tile goes: the size it had before the tiler first
 // placed it, centred on the tile it leaves, inside the work area. A launch size larger than the
 // work area is cut to it.
@@ -115,6 +258,13 @@ void TilingEngine::defer(int ms, std::function<void()> task) {
 void TilingEngine::setSettings(const TilingSettings& settings) {
   const bool layoutChanged = settings.layout != settings_.layout;
   const bool ratioChanged = settings.ratio != settings_.ratio;
+  if (running_ && layoutChanged) {
+    // Every workspace takes the new default: those that change layout start from its sizes.
+    const QString next = canonicalLayout(settings.layout);
+    for (const WorkspaceKey& key : model_.keys()) {
+      if (canonicalLayout(model_.layout(key, settings_.layout)) != next) model_.resetSizes(key);
+    }
+  }
   settings_ = settings;
   if (!running_) return;
   if (layoutChanged) model_.clearLayouts();
@@ -272,11 +422,11 @@ void TilingEngine::onMoveSizeStart(WindowId hwnd) {
     moveDrag.slotRects = slotRects;
     moveDrags_[hwnd] = std::move(moveDrag);
   }
-  if (canonicalLayout(model_.layout(*key, settings_.layout)) != QLatin1String("mainStack")) {
-    return;
-  }
+  const QString layout = canonicalLayout(model_.layout(*key, settings_.layout));
+  if (!resizesByMouse(layout)) return;
   ResizeDrag drag;
   drag.key = *key;
+  drag.layout = layout;
   drag.startRect = facts->rect;
   drag.area = area;
   drag.active = active;
@@ -302,6 +452,7 @@ void TilingEngine::onMoveSizeEnd(WindowId hwnd) {
   const auto drag = resizeDrags_.find(hwnd);
   const bool hasResizeDrag = drag != resizeDrags_.end();
   const bool wasResize = hasResizeDrag && drag->second.resized;
+  const bool snapped = hasResizeDrag && drag->second.snapped;
   const QRect startRect = hasResizeDrag ? drag->second.startRect : QRect();
   const std::optional<double> initialRatio =
       hasResizeDrag ? drag->second.initialRatio : std::nullopt;
@@ -326,14 +477,15 @@ void TilingEngine::onMoveSizeEnd(WindowId hwnd) {
     return;
   }
   const bool cancelled = hasResizeDrag && wasResize && !differs(startRect, facts->rect);
-  if (cancelled && key) {
+  if ((cancelled || snapped) && key) {
     WorkspaceView& view = model_.edit(*key);
     view.ratio = initialRatio;
     view.weights = initialWeights;
   }
   const auto placed = placed_.find(hwnd);
-  if (!cancelled && !wasResize && !sizeChanged && placed != placed_.end() &&
-      differs(placed->second, facts->rect)) {
+  // A Snap is the user placing the window by hand, as a move is.
+  if (snapped || (!cancelled && !wasResize && !sizeChanged && placed != placed_.end() &&
+                  differs(placed->second, facts->rect))) {
     // The user took this window out of the layout.
     model_.setFloating(hwnd, true);
     placed_.erase(hwnd);
@@ -356,7 +508,16 @@ void TilingEngine::onLocationChange(WindowId hwnd) {
       std::abs(drag.startRect.height() - rect.height()) > kMovedTolerance) {
     drag.resized = true;
   }
-  if (paused_ || !drag.resized || drag.slotRects.size() != drag.active.size() ||
+  // A border drag moves one edge per axis (two at a corner). Both edges of an axis at once is
+  // Windows placing the window, a Snap at the release: that is not a resize of the tiles.
+  const auto edgeMoved = [&](Edge edge) {
+    return std::abs(edgeAt(rect, edge) - edgeAt(drag.startRect, edge)) > kMovedTolerance;
+  };
+  if (drag.resized && ((edgeMoved(Edge::Left) && edgeMoved(Edge::Right)) ||
+                       (edgeMoved(Edge::Top) && edgeMoved(Edge::Bottom)))) {
+    drag.snapped = true;
+  }
+  if (paused_ || !drag.resized || drag.snapped || drag.slotRects.size() != drag.active.size() ||
       drag.active.size() < 2) {
     return;
   }
@@ -364,79 +525,32 @@ void TilingEngine::onLocationChange(WindowId hwnd) {
   const auto at = std::find(drag.active.begin(), drag.active.end(), hwnd);
   if (at == drag.active.end()) return;
   const size_t index = static_cast<size_t>(at - drag.active.begin());
-  const QRect& slot = drag.slotRects[index];
-  const QRect& main = drag.slotRects.front();
-  const bool mainOnLeft = main.x() < drag.slotRects[1].x();
-  const int innerLeft = drag.area.x() + drag.gap;
-  const int innerRight = drag.area.x() + drag.area.width() - drag.gap;
-  const int usableWidth = innerRight - innerLeft - drag.gap;
-  if (usableWidth <= 0) return;
-
+  const QString shape = resizeShape(drag.layout, drag.active.size());
   WorkspaceView& view = model_.edit(drag.key);
   bool changed = false;
-  const bool mainBoundaryIsRight = index == 0 ? mainOnLeft : !mainOnLeft;
-  const int startEdge =
-      mainBoundaryIsRight ? drag.startRect.x() + drag.startRect.width() : drag.startRect.x();
-  const int currentEdge = mainBoundaryIsRight ? rect.x() + rect.width() : rect.x();
-  if (std::abs(currentEdge - startEdge) > kMovedTolerance) {
-    int mainWidth = 0;
-    if (index == 0) {
-      mainWidth = mainOnLeft ? currentEdge - innerLeft : innerRight - currentEdge;
-    } else {
-      mainWidth =
-          mainOnLeft ? currentEdge - innerLeft - drag.gap : innerRight - currentEdge - drag.gap;
-    }
-    const double ratio = std::clamp(static_cast<double>(mainWidth) / usableWidth, 0.1, 0.9);
-    if (!view.ratio || std::abs(*view.ratio - ratio) > 0.0001) {
-      view.ratio = ratio;
-      changed = true;
-    }
-  }
-
-  if (index > 0 && drag.active.size() > 2) {
-    std::optional<size_t> above;
-    std::optional<size_t> below;
-    for (size_t other = 1; other < drag.slotRects.size(); ++other) {
-      if (other == index) continue;
-      if (drag.slotRects[other].y() + drag.slotRects[other].height() <= slot.y() &&
-          (!above || drag.slotRects[other].y() > drag.slotRects[*above].y())) {
-        above = other;
-      }
-      if (drag.slotRects[other].y() >= slot.y() + slot.height() &&
-          (!below || drag.slotRects[other].y() < drag.slotRects[*below].y())) {
-        below = other;
-      }
-    }
-    const bool bottomMoved =
-        below && std::abs((rect.y() + rect.height()) -
-                          (drag.startRect.y() + drag.startRect.height())) > kMovedTolerance;
-    const bool topMoved = above && std::abs(rect.y() - drag.startRect.y()) > kMovedTolerance;
-    if (bottomMoved || topMoved) {
-      const size_t neighbor = bottomMoved ? *below : *above;
-      const int pairHeight = slot.height() + drag.slotRects[neighbor].height();
-      const int desiredHeight =
-          bottomMoved ? rect.y() + rect.height() - slot.y() : slot.y() + slot.height() - rect.y();
-      if (pairHeight > 1) {
-        const double currentWeight = view.weights.count(hwnd) ? view.weights.at(hwnd) : 1.0;
-        const WindowId otherWindow = drag.active[neighbor];
-        const double otherWeight =
-            view.weights.count(otherWindow) ? view.weights.at(otherWindow) : 1.0;
-        const double pairWeight = currentWeight + otherWeight;
-        const double fraction =
-            static_cast<double>(std::clamp(desiredHeight, 1, pairHeight - 1)) / pairHeight;
-        const double minWeight = std::max(kMinWeight, pairWeight - kMaxWeight);
-        const double maxWeight = std::min(kMaxWeight, pairWeight - kMinWeight);
-        if (minWeight <= maxWeight) {
-          const double nextWeight = std::clamp(pairWeight * fraction, minWeight, maxWeight);
-          const double nextOther = pairWeight - nextWeight;
-          if (std::abs(nextWeight - currentWeight) > 0.0001 ||
-              std::abs(nextOther - otherWeight) > 0.0001) {
-            view.weights[hwnd] = nextWeight;
-            view.weights[otherWindow] = nextOther;
-            changed = true;
-          }
+  // Each edge that moved: an inner one moves the boundary it shares with the tile across it, an
+  // outer one (on the work area) goes back at the release.
+  for (const Edge edge : {Edge::Left, Edge::Right, Edge::Top, Edge::Bottom}) {
+    if (!edgeMoved(edge)) continue;
+    const std::optional<size_t> other = slotAcross(drag.slotRects, index, edge, drag.gap);
+    if (!other) continue;
+    const int position = edgeAt(rect, edge);
+    switch (edgeRole(shape, index, *other, edge)) {
+      case EdgeRole::Ratio: {
+        const std::optional<double> ratio =
+            ratioFromEdge(shape, drag.area, drag.gap, index == 0, edge, position);
+        if (ratio && (!view.ratio || std::abs(*view.ratio - *ratio) > 0.0001)) {
+          view.ratio = *ratio;
+          changed = true;
         }
+        break;
       }
+      case EdgeRole::Weights:
+        changed |= shareEdge(view, hwnd, drag.active[*other], drag.slotRects[index],
+                             drag.slotRects[*other], edge, position);
+        break;
+      case EdgeRole::None:
+        break;
     }
   }
   if (changed) requestRetile(drag.key);
@@ -895,6 +1009,11 @@ void TilingEngine::onSettlingMove(WindowId hwnd) {
   qDebug().noquote() << "tiling:" << describe(hwnd, &*facts) << moved << "- left there";
 }
 
+bool TilingEngine::resizesByMouse(const QString& layout) {
+  return layout == QLatin1String("mainStack") || layout == QLatin1String("columns") ||
+         layout == QLatin1String("rows") || layout == QLatin1String("centerMain");
+}
+
 std::vector<QRect> TilingEngine::slotsFor(const WorkspaceKey& key, const QRect& area,
                                           const std::vector<WindowId>& active) const {
   const WorkspaceView& view = model_.view(key);
@@ -966,10 +1085,16 @@ std::optional<WorkspaceKey> TilingEngine::foregroundKey() const {
 bool TilingEngine::setWorkspaceLayout(const QString& name) {
   const QString layout = canonicalLayout(name);
   if (layout.isEmpty()) return false;
+  // Sizes given by hand belong to the layout they were given in: another starts from its defaults.
   if (const std::optional<WorkspaceKey> key = foregroundKey()) {
+    if (canonicalLayout(model_.layout(*key, settings_.layout)) != layout) model_.resetSizes(*key);
     model_.setLayout(*key, layout);
     requestRetile(*key);
   } else {
+    for (const WorkspaceKey& other : model_.keys()) {
+      const bool ownLayout = !model_.layout(other, QString()).isEmpty();
+      if (!ownLayout && canonicalLayout(settings_.layout) != layout) model_.resetSizes(other);
+    }
     settings_.layout = layout;
     retileAll();
   }
@@ -1156,16 +1281,35 @@ CommandResult TilingEngine::resize(Axis axis, int sign) {
   if (!focused) return fail(QStringLiteral("the focused window is not tiled"));
   const WorkspaceKey& key = focused->key;
   const QString layout = canonicalLayout(model_.layout(key, settings_.layout));
-  if (layout == QLatin1String("columns") || layout == QLatin1String("rows") ||
-      layout == QLatin1String("grid")) {
+  if (layout == QLatin1String("grid")) {
     return fail(QStringLiteral("the %1 layout does not resize").arg(layout));
   }
   const std::vector<WindowId> active = activeWindows(key);
   const auto at = std::find(active.begin(), active.end(), focused->hwnd);
   if (at == active.end() || active.size() < 2) return ok(QStringLiteral("unchanged"));
-  const bool isMain = at == active.begin();
+  const size_t index = static_cast<size_t>(at - active.begin());
+  const bool isMain = index == 0;
+  // Along `axis`, the ratio moves or the focused window's weight against its neighbours.
+  bool byRatio = false;
+  bool byWeight = false;
+  const QString shape = resizeShape(layout, active.size());
+  if (shape == QLatin1String("columns")) {
+    byWeight = axis == Axis::Horizontal;
+  } else if (shape == QLatin1String("rows")) {
+    byWeight = axis == Axis::Vertical;
+  } else if (shape == QLatin1String("centerMain")) {
+    // Its side column: window 1, 3, 5... on the right, 2, 4, 6... on the left.
+    const size_t others = active.size() - 1;
+    const size_t inColumn = isMain ? 0 : ((index - 1) % 2 == 0 ? (others + 1) / 2 : others / 2);
+    byRatio = axis == Axis::Horizontal;
+    byWeight = axis == Axis::Vertical && inColumn >= 2;
+  } else {
+    byRatio = axis == Axis::Horizontal;
+    byWeight = axis == Axis::Vertical && !isMain && active.size() >= 3;
+  }
+  if (!byRatio && !byWeight) return ok(QStringLiteral("unchanged"));
   WorkspaceView& view = model_.edit(key);
-  if (axis == Axis::Horizontal) {
+  if (byRatio) {
     // A window of the stack grows by taking width from the main window, and the other way round.
     const double delta = (isMain ? 1 : -1) * (sign > 0 ? 1 : -1) * kRatioStep;
     const double current = view.ratio.value_or(settings_.ratio);
@@ -1173,7 +1317,6 @@ CommandResult TilingEngine::resize(Axis axis, int sign) {
     if (next == current) return ok(QStringLiteral("unchanged"));
     view.ratio = next;
   } else {
-    if (isMain || active.size() < 3) return ok(QStringLiteral("unchanged"));
     const auto found = view.weights.find(focused->hwnd);
     const double current = found == view.weights.end() ? 1.0 : found->second;
     const double next =

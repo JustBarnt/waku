@@ -655,7 +655,7 @@ TEST(TilingEngine, ResizeInAnotherLayoutKeepsTheExistingFloatBehavior) {
   rig.open(1);
   rig.open(2);
   rig.placer.front = 2;
-  ASSERT_TRUE(rig.engine.setWorkspaceLayout(QStringLiteral("columns")));
+  ASSERT_TRUE(rig.engine.setWorkspaceLayout(QStringLiteral("grid")));
   rig.settle();
 
   rig.send(EventKind::MoveSizeStart, 2);
@@ -685,6 +685,180 @@ TEST(TilingEngine, ResizeTrackingStopsOnDestroyAndStop) {
   EXPECT_FALSE(rig.engine.tracksMouseResize(2));
   rig.send(EventKind::LocationChange, 2);
   EXPECT_FALSE(rig.engine.model().contains(2));
+}
+
+namespace {
+
+// Opens `count` windows (1, 2, ...) in `layout`, the first in front.
+void openIn(Rig& rig, const QString& layout, int count) {
+  rig.engine.start();
+  for (WindowId id = 1; id <= static_cast<WindowId>(count); ++id) rig.open(id);
+  rig.placer.front = 1;
+  ASSERT_TRUE(rig.engine.setWorkspaceLayout(layout));
+  rig.settle();
+}
+
+double weightOf(Rig& rig, WindowId hwnd) {
+  const WorkspaceView& view = rig.engine.model().view(*rig.engine.model().keyOf(hwnd));
+  const auto found = view.weights.find(hwnd);
+  return found == view.weights.end() ? 1.0 : found->second;
+}
+
+}  // namespace
+
+TEST(TilingEngine, AColumnsDividerDragResizesTheTwoColumnsBesideIt) {
+  Rig rig;
+  openIn(rig, QStringLiteral("columns"), 3);
+  const QRect first = rig.placer.windows[1].rect;
+  const QRect third = rig.placer.windows[3].rect;
+  rig.send(EventKind::MoveSizeStart, 1);
+  ASSERT_TRUE(rig.engine.tracksMouseResize(1));
+  rig.placer.windows[1].rect.setWidth(first.width() + 120);
+  rig.send(EventKind::LocationChange, 1);
+  rig.settle();
+  EXPECT_GT(weightOf(rig, 1), 1.0);
+  EXPECT_LT(weightOf(rig, 2), 1.0);
+  EXPECT_DOUBLE_EQ(weightOf(rig, 3), 1.0);
+  EXPECT_NEAR(rig.placer.windows[2].rect.x(), rig.placer.windows[1].rect.right() + 1 + kGap, 1);
+  EXPECT_NEAR(rig.placer.windows[3].rect.x(), third.x(), 1);
+  rig.send(EventKind::MoveSizeEnd, 1);
+  rig.settle();
+  EXPECT_FALSE(rig.engine.model().isFloating(1));
+  EXPECT_NEAR(rig.placer.windows[1].rect.width(), first.width() + 120, 1);
+}
+
+TEST(TilingEngine, ARowsDividerDragResizesTheTwoBandsBesideIt) {
+  Rig rig;
+  openIn(rig, QStringLiteral("rows"), 3);
+  const QRect second = rig.placer.windows[2].rect;
+  const QRect third = rig.placer.windows[3].rect;
+  rig.send(EventKind::MoveSizeStart, 2);
+  rig.placer.windows[2].rect.setY(second.y() - 80);  // its top edge, shared with window 1
+  rig.send(EventKind::LocationChange, 2);
+  rig.settle();
+  EXPECT_GT(weightOf(rig, 2), 1.0);
+  EXPECT_LT(weightOf(rig, 1), 1.0);
+  EXPECT_NEAR(rig.placer.windows[1].rect.bottom() + 1 + kGap, rig.placer.windows[2].rect.y(), 1);
+  EXPECT_EQ(rig.placer.windows[3].rect, third);
+  rig.send(EventKind::MoveSizeEnd, 2);
+  rig.settle();
+  EXPECT_FALSE(rig.engine.model().isFloating(2));
+}
+
+TEST(TilingEngine, AnOuterEdgeOfAColumnGoesBackAtTheRelease) {
+  Rig rig;
+  openIn(rig, QStringLiteral("columns"), 2);
+  const QRect original = rig.placer.windows[1].rect;
+  rig.send(EventKind::MoveSizeStart, 1);
+  rig.placer.windows[1].rect.setY(original.y() + 50);
+  rig.send(EventKind::LocationChange, 1);
+  rig.send(EventKind::MoveSizeEnd, 1);
+  rig.settle();
+  EXPECT_EQ(rig.placer.windows[1].rect, original);
+  EXPECT_TRUE(rig.engine.model().view(*rig.engine.model().keyOf(1)).weights.empty());
+  EXPECT_FALSE(rig.engine.model().isFloating(1));
+}
+
+TEST(TilingEngine, AColumnsDragFollowsAHorizontalFlipAndACancelRestoresIt) {
+  Rig rig;
+  openIn(rig, QStringLiteral("columns"), 2);
+  ASSERT_TRUE(rig.engine.flip(Axis::Horizontal).ok);  // window 1 on the right
+  rig.settle();
+  const QRect original = rig.placer.windows[1].rect;
+  rig.send(EventKind::MoveSizeStart, 1);
+  rig.placer.windows[1].rect.setX(original.x() - 100);  // its left edge, shared with window 2
+  rig.send(EventKind::LocationChange, 1);
+  rig.settle();
+  EXPECT_GT(weightOf(rig, 1), 1.0);
+  EXPECT_NEAR(rig.placer.windows[2].rect.right() + 1 + kGap, rig.placer.windows[1].rect.x(), 1);
+  rig.placer.windows[1].rect = original;  // Esc: Windows puts it back
+  rig.send(EventKind::MoveSizeEnd, 1);
+  rig.settle();
+  EXPECT_TRUE(rig.engine.model().view(*rig.engine.model().keyOf(1)).weights.empty());
+  EXPECT_EQ(rig.placer.windows[2].rect,
+            flipSlots(layoutSlots(QStringLiteral("columns"), kAreaA, 2, kGap, 0.5), kAreaA, true,
+                      false)[1]);
+}
+
+TEST(TilingEngine, CenterMainKeepsItsSidesEqualWhenTheMainEdgeIsDragged) {
+  Rig rig;
+  openIn(rig, QStringLiteral("centerMain"), 3);  // 2 on the right, 3 on the left
+  const QRect main = rig.placer.windows[1].rect;
+  const QRect left = rig.placer.windows[3].rect;
+  rig.send(EventKind::MoveSizeStart, 1);
+  rig.placer.windows[1].rect.setWidth(main.width() + 100);  // its right edge out by 100
+  rig.send(EventKind::LocationChange, 1);
+  rig.settle();
+  const WorkspaceKey key = *rig.engine.model().keyOf(1);
+  ASSERT_TRUE(rig.engine.model().view(key).ratio.has_value());
+  EXPECT_GT(*rig.engine.model().view(key).ratio, 0.5);
+  EXPECT_NEAR(rig.placer.windows[2].rect.width(), rig.placer.windows[3].rect.width(), 1);
+  EXPECT_NEAR(rig.placer.windows[3].rect.width(), left.width() - 100, 2);
+  rig.send(EventKind::MoveSizeEnd, 1);
+  rig.settle();
+  // Centred: its left edge went out by as much.
+  EXPECT_NEAR(rig.placer.windows[1].rect.x(), main.x() - 100, 2);
+  EXPECT_NEAR(rig.placer.windows[1].rect.width(), main.width() + 200, 2);
+}
+
+TEST(TilingEngine, CenterMainSideWindowsInnerEdgeMovesTheRatio) {
+  Rig rig;
+  openIn(rig, QStringLiteral("centerMain"), 3);
+  const QRect right = rig.placer.windows[2].rect;
+  rig.send(EventKind::MoveSizeStart, 2);
+  rig.placer.windows[2].rect.setX(right.x() - 80);  // grows towards the main window
+  rig.send(EventKind::LocationChange, 2);
+  rig.settle();
+  const WorkspaceKey key = *rig.engine.model().keyOf(1);
+  ASSERT_TRUE(rig.engine.model().view(key).ratio.has_value());
+  EXPECT_LT(*rig.engine.model().view(key).ratio, 0.5);
+  EXPECT_NEAR(rig.placer.windows[1].rect.right() + 1 + kGap, right.x() - 80, 2);
+}
+
+TEST(TilingEngine, CenterMainSideColumnsResizeTheirOwnWindowsOnly) {
+  Rig rig;
+  openIn(rig, QStringLiteral("centerMain"), 5);  // right: 2 over 4; left: 3 over 5
+  const QRect second = rig.placer.windows[2].rect;
+  const QRect third = rig.placer.windows[3].rect;
+  const QRect fifth = rig.placer.windows[5].rect;
+  rig.send(EventKind::MoveSizeStart, 2);
+  rig.placer.windows[2].rect.setHeight(second.height() + 100);
+  rig.send(EventKind::LocationChange, 2);
+  rig.settle();
+  EXPECT_GT(weightOf(rig, 2), 1.0);
+  EXPECT_LT(weightOf(rig, 4), 1.0);
+  EXPECT_DOUBLE_EQ(weightOf(rig, 3), 1.0);
+  EXPECT_NEAR(rig.placer.windows[4].rect.y(), rig.placer.windows[2].rect.bottom() + 1 + kGap, 1);
+  EXPECT_EQ(rig.placer.windows[3].rect, third);
+  EXPECT_EQ(rig.placer.windows[5].rect, fifth);
+  EXPECT_FALSE(rig.engine.model().view(*rig.engine.model().keyOf(1)).ratio.has_value());
+}
+
+TEST(TilingEngine, CenterMainWithTwoWindowsResizesAsMainStack) {
+  Rig rig;
+  openIn(rig, QStringLiteral("centerMain"), 2);
+  const QRect main = rig.placer.windows[1].rect;
+  rig.send(EventKind::MoveSizeStart, 1);
+  rig.placer.windows[1].rect.setWidth(main.width() + 120);
+  rig.send(EventKind::LocationChange, 1);
+  rig.settle();
+  EXPECT_GT(*rig.engine.model().view(*rig.engine.model().keyOf(1)).ratio, 0.5);
+  EXPECT_NEAR(rig.placer.windows[2].rect.x(), main.right() + 1 + 120 + kGap, 1);
+}
+
+TEST(TilingEngine, AWindowsSnapAtTheReleaseFloatsItInAResizableLayout) {
+  Rig rig;
+  rig.engine.start();
+  rig.open(1);
+  rig.open(2);
+  rig.send(EventKind::MoveSizeStart, 2);
+  ASSERT_TRUE(rig.engine.tracksMouseResize(2));
+  rig.placer.windows[2].rect = QRect(0, 0, 960, 1040);  // snapped to the left half
+  rig.send(EventKind::MoveSizeEnd, 2);
+  rig.settle();
+  EXPECT_TRUE(rig.engine.model().isFloating(2));
+  EXPECT_FALSE(rig.engine.model().view(*rig.engine.model().keyOf(1)).ratio.has_value());
+  EXPECT_EQ(rig.placer.lastSlot(1), rig.slot(0, 1));
 }
 
 TEST(TilingEngine, AWindowIsNotPlacedWhileTheUserHoldsIt) {
@@ -921,7 +1095,7 @@ TEST(TilingEngine, AResizeOrASnapDuringASwapDragKeepsTheOldBehaviour) {
   const std::vector<DropTarget>& drops = recordDrops(rig);
   rig.send(EventKind::MoveSizeStart, 2);
   EXPECT_TRUE(rig.engine.tracksLocation(2));
-  EXPECT_FALSE(rig.engine.tracksMouseResize(2));
+  EXPECT_TRUE(rig.engine.tracksMouseResize(2));  // columns resize by mouse: a Snap still floats
   dragTo(rig, 2, QPoint(300, 300));
   EXPECT_EQ(rig.engine.dropTarget().kind, DropKind::Swap);
   // Windows snaps it at the release: the size changes.
@@ -979,7 +1153,7 @@ TEST(TilingEngine, ADragUnderFloatTracksNoLocation) {
   rig.open(1);
   rig.open(2);
   rig.placer.front = 2;
-  ASSERT_TRUE(rig.engine.setWorkspaceLayout(QStringLiteral("columns")));
+  ASSERT_TRUE(rig.engine.setWorkspaceLayout(QStringLiteral("grid")));
   rig.settle();
   rig.send(EventKind::MoveSizeStart, 2);
   EXPECT_FALSE(rig.engine.tracksLocation(2));
@@ -1529,18 +1703,77 @@ TEST(TilingEngine, CycleLayoutWalksTheListOfTheForegroundWorkspaceAndWraps) {
   EXPECT_EQ(rig.engine.cycleLayout(1).message, names.first());
 }
 
-TEST(TilingEngine, ColumnsRowsAndGridDoNotResize) {
+TEST(TilingEngine, OnlyGridDoesNotResize) {
   Rig rig;
   rig.engine.start();
   rig.open(1);
   rig.open(2);
   rig.placer.front = 1;
-  for (const char* layout : {"columns", "rows", "grid"}) {
+  rig.engine.setWorkspaceLayout(QStringLiteral("grid"));
+  EXPECT_FALSE(rig.engine.resize(Axis::Horizontal, 1).ok);
+  for (const char* layout : {"columns", "rows", "centerMain", "bsp"}) {
     rig.engine.setWorkspaceLayout(QString::fromLatin1(layout));
-    EXPECT_FALSE(rig.engine.resize(Axis::Horizontal, 1).ok) << layout;
+    EXPECT_TRUE(rig.engine.resize(Axis::Horizontal, 1).ok) << layout;
   }
-  rig.engine.setWorkspaceLayout(QStringLiteral("bsp"));
-  EXPECT_TRUE(rig.engine.resize(Axis::Horizontal, 1).ok);
+}
+
+TEST(TilingEngine, KeyboardResizeUsesTheWeightsOfColumnsRowsAndCenterMain) {
+  Rig rig;
+  rig.engine.start();
+  for (WindowId id = 1; id <= 5; ++id) rig.open(id);
+  rig.placer.front = 1;
+  ASSERT_TRUE(rig.engine.setWorkspaceLayout(QStringLiteral("columns")));
+  rig.settle();
+  const WorkspaceKey key = *rig.engine.model().keyOf(1);
+  const int narrow = rig.placer.windows[1].rect.width();
+  EXPECT_EQ(rig.engine.resize(Axis::Horizontal, 1).message, QStringLiteral("resized"));
+  rig.settle();
+  EXPECT_DOUBLE_EQ(rig.engine.model().view(key).weights.at(1), 1.1);
+  EXPECT_GT(rig.placer.windows[1].rect.width(), narrow);
+  EXPECT_EQ(rig.engine.resize(Axis::Vertical, 1).message, QStringLiteral("unchanged"));
+
+  ASSERT_TRUE(rig.engine.setWorkspaceLayout(QStringLiteral("rows")));
+  EXPECT_TRUE(rig.engine.model().view(key).weights.empty());  // a new layout, its default sizes
+  EXPECT_EQ(rig.engine.resize(Axis::Vertical, 1).message, QStringLiteral("resized"));
+  EXPECT_EQ(rig.engine.resize(Axis::Horizontal, 1).message, QStringLiteral("unchanged"));
+
+  // centerMain: 2 and 4 on the right, 3 and 5 on the left.
+  ASSERT_TRUE(rig.engine.setWorkspaceLayout(QStringLiteral("centerMain")));
+  rig.placer.front = 2;
+  EXPECT_EQ(rig.engine.resize(Axis::Vertical, 1).message, QStringLiteral("resized"));
+  EXPECT_DOUBLE_EQ(rig.engine.model().view(key).weights.at(2), 1.1);
+  rig.placer.front = 1;
+  EXPECT_EQ(rig.engine.resize(Axis::Vertical, 1).message, QStringLiteral("unchanged"));
+  EXPECT_EQ(rig.engine.resize(Axis::Horizontal, 1).message, QStringLiteral("resized"));
+  EXPECT_DOUBLE_EQ(*rig.engine.model().view(key).ratio, 0.55);
+}
+
+TEST(TilingEngine, ALayoutChangeStartsFromTheNewLayoutsDefaultSizes) {
+  Rig rig;
+  rig.engine.start();
+  rig.open(1);
+  rig.open(2);
+  rig.open(3);
+  rig.placer.front = 2;
+  const WorkspaceKey key = *rig.engine.model().keyOf(2);
+  ASSERT_EQ(rig.engine.resize(Axis::Horizontal, 1).message, QStringLiteral("resized"));
+  ASSERT_EQ(rig.engine.resize(Axis::Vertical, 1).message, QStringLiteral("resized"));
+  // The same layout again changes nothing.
+  ASSERT_TRUE(rig.engine.setWorkspaceLayout(QStringLiteral("mainStack")));
+  EXPECT_TRUE(rig.engine.model().view(key).ratio.has_value());
+  EXPECT_FALSE(rig.engine.model().view(key).weights.empty());
+  ASSERT_TRUE(rig.engine.setWorkspaceLayout(QStringLiteral("columns")));
+  EXPECT_FALSE(rig.engine.model().view(key).ratio.has_value());
+  EXPECT_TRUE(rig.engine.model().view(key).weights.empty());
+  // A new default layout resets the workspaces it changes.
+  ASSERT_EQ(rig.engine.resize(Axis::Horizontal, 1).message, QStringLiteral("resized"));
+  TilingSettings settings = rig.engine.settings();
+  settings.layout = QStringLiteral("rows");
+  rig.engine.setSettings(settings);
+  EXPECT_TRUE(rig.engine.model().view(key).weights.empty());
+  rig.settle();
+  EXPECT_EQ(rig.placer.windows[1].rect,
+            layoutSlots(QStringLiteral("rows"), kAreaA, 3, kGap, 0.5)[0]);
 }
 
 TEST(TilingEngine, FocusStepActivatesTheNextAndPreviousWindowWithWrap) {

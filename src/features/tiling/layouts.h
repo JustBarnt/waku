@@ -35,8 +35,10 @@ QString canonicalLayout(const QString& name);
 //   grid          a near-square grid, filled row by row; the last row spreads over the width
 //   centerMain    the first window takes the middle `ratio` of the width, the others stand in a
 //                 column on each side (right first); with two windows it is mainStack
-// `weights` (optional, one per window in stack order) sizes the stacked windows of mainStack
-// against each other by height; the entry of the main window and a missing entry count as 1.
+// `weights` (optional, one per window in stack order; a missing entry counts as 1) sizes windows
+// against their neighbours: the stacked windows of mainStack by height (the main window's entry is
+// not used), every column of columns by width, every band of rows by height, and the windows of
+// each side column of centerMain by height. Other layouts do not read them.
 // The slots do not overlap and lie inside `area`; the last slot of a row or column absorbs the
 // rounding remainder. A gap larger than the area leaves 1 pixel slots instead of negative ones.
 std::vector<QRect> layoutSlots(const QString& layout, const QRect& area, int count, int gap,

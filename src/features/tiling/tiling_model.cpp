@@ -169,6 +169,13 @@ void TilingModel::clearRatios() {
   for (auto& entry : views_) entry.second.ratio.reset();
 }
 
+void TilingModel::resetSizes(const WorkspaceKey& key) {
+  const auto found = views_.find(key);
+  if (found == views_.end()) return;
+  found->second.ratio.reset();
+  found->second.weights.clear();
+}
+
 bool TilingModel::swap(WindowId a, WindowId b) {
   const std::optional<WorkspaceKey> key = keyOf(a);
   if (!key || key != keyOf(b) || a == b) return false;

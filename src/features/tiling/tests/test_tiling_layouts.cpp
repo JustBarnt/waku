@@ -272,6 +272,33 @@ TEST(TilingLayouts, WeightsSizeTheStackedWindowsByHeight) {
             layoutSlots(QStringLiteral("mainStack"), area, 3, 10, 0.5));
 }
 
+TEST(TilingLayouts, WeightsSizeColumnsRowsAndTheSideColumnsOfCenterMain) {
+  const QRect area(0, 0, 1000, 900);
+  const auto columns = layoutSlots(QStringLiteral("columns"), area, 3, 10, 0.5, {2.0, 1.0, 1.0});
+  ASSERT_EQ(columns.size(), 3u);
+  EXPECT_GT(columns[0].width(), columns[1].width());
+  EXPECT_NEAR(columns[1].width(), columns[2].width(), 1);
+  EXPECT_EQ(columns[2].right(), 989);
+  expectDisjointInside(columns, area);
+  const auto rows = layoutSlots(QStringLiteral("rows"), area, 3, 10, 0.5, {1.0, 1.0, 2.0});
+  EXPECT_GT(rows[2].height(), rows[0].height());
+  EXPECT_EQ(rows[2].bottom(), 889);
+  expectDisjointInside(rows, area);
+  // centerMain: 1 and 3 stand on the right, 2 and 4 on the left; each column by its own weights.
+  const auto center =
+      layoutSlots(QStringLiteral("centerMain"), area, 5, 10, 0.5, {1.0, 2.0, 1.0, 1.0, 1.0});
+  ASSERT_EQ(center.size(), 5u);
+  EXPECT_GT(center[1].height(), center[3].height());
+  EXPECT_EQ(center[2], layoutSlots(QStringLiteral("centerMain"), area, 5, 10, 0.5)[2]);
+  expectDisjointInside(center, area);
+  // Equal weights are the plain layouts.
+  for (const char* name : {"columns", "rows", "centerMain"}) {
+    EXPECT_EQ(layoutSlots(QString::fromLatin1(name), area, 5, 10, 0.5, {3.0, 3.0, 3.0, 3.0, 3.0}),
+              layoutSlots(QString::fromLatin1(name), area, 5, 10, 0.5))
+        << name;
+  }
+}
+
 TEST(TilingLayouts, NeighbourSlotFindsTheNearestSlotInADirection) {
   const QRect area(0, 0, 1000, 900);
   const auto rects = layoutSlots(QStringLiteral("mainStack"), area, 4, 10, 0.5);

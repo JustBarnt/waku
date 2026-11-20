@@ -50,6 +50,28 @@ std::vector<std::pair<int, int>> weightedSpans(int start, int length, int gap,
   return out;
 }
 
+// The weights of `count` windows from `weights` (stack order), starting at entry `first` and taking
+// every `step`-th; a missing entry is 1.
+std::vector<double> pickWeights(const std::vector<double>& weights, size_t first, int count,
+                                size_t step = 1) {
+  std::vector<double> out(static_cast<size_t>(std::max(count, 0)), 1.0);
+  for (size_t i = 0; i < out.size(); ++i) {
+    const size_t at = first + i * step;
+    if (at < weights.size()) out[i] = weights[at];
+  }
+  return out;
+}
+
+// spans() while the weights are all equal (a workspace never resized lays out as before),
+// weightedSpans() otherwise.
+std::vector<std::pair<int, int>> sizedSpans(int start, int length, int gap,
+                                            const std::vector<double>& weights) {
+  const bool even =
+      std::all_of(weights.begin(), weights.end(), [&](double w) { return w == weights.front(); });
+  return even ? spans(start, length, static_cast<int>(weights.size()), gap)
+              : weightedSpans(start, length, gap, weights);
+}
+
 // Splits [start, start + length) into a first span of `fraction` of the room left by `gap` and a
 // second span that takes the rest. Needs length >= gap + 2; the caller checks.
 std::pair<std::pair<int, int>, std::pair<int, int>> splitSpan(int start, int length, int gap,
@@ -107,7 +129,8 @@ std::vector<QRect> gridSlots(const QRect& inner, int count, int gap) {
 
 // A main window in the centre (`ratio` of the width) and the others in a column on each side. The
 // first stacked window goes right, the next left, and so on.
-std::vector<QRect> centerMainSlots(const QRect& inner, int count, int gap, double ratio) {
+std::vector<QRect> centerMainSlots(const QRect& inner, int count, int gap, double ratio,
+                                   const std::vector<double>& weights) {
   const int others = count - 1;
   const int rightCount = (others + 1) / 2;
   const int leftCount = others / 2;
@@ -119,8 +142,12 @@ std::vector<QRect> centerMainSlots(const QRect& inner, int count, int gap, doubl
   const int rightWidth = std::max(1, inner.x() + inner.width() - rightX);
   std::vector<QRect> rects;
   rects.emplace_back(mainX, inner.y(), mainWidth, inner.height());
-  const auto right = spans(inner.y(), inner.height(), rightCount, gap);
-  const auto left = spans(inner.y(), inner.height(), leftCount, gap);
+  // Window 1, 3, 5... stand on the right and 2, 4, 6... on the left, each column sized by its own
+  // windows' weights.
+  const auto right =
+      sizedSpans(inner.y(), inner.height(), gap, pickWeights(weights, 1, rightCount, 2));
+  const auto left =
+      sizedSpans(inner.y(), inner.height(), gap, pickWeights(weights, 2, leftCount, 2));
   for (int i = 0; i < others; ++i) {
     if (i % 2 == 0) {
       rects.emplace_back(rightX, right[static_cast<size_t>(i / 2)].first, rightWidth,
@@ -160,13 +187,15 @@ std::vector<QRect> layoutSlots(const QString& layout, const QRect& area, int cou
 
   const QString name = canonicalLayout(layout);
   if (name == kColumns) {
-    for (const auto& [x, w] : spans(inner.x(), inner.width(), count, gap)) {
+    for (const auto& [x, w] :
+         sizedSpans(inner.x(), inner.width(), gap, pickWeights(weights, 0, count))) {
       rects.emplace_back(x, inner.y(), w, inner.height());
     }
     return rects;
   }
   if (name == kRows) {
-    for (const auto& [y, h] : spans(inner.y(), inner.height(), count, gap)) {
+    for (const auto& [y, h] :
+         sizedSpans(inner.y(), inner.height(), gap, pickWeights(weights, 0, count))) {
       rects.emplace_back(inner.x(), y, inner.width(), h);
     }
     return rects;
@@ -185,7 +214,7 @@ std::vector<QRect> layoutSlots(const QString& layout, const QRect& area, int cou
     }
   }
   if (name == kGrid) return gridSlots(inner, count, gap);
-  if (name == kCenterMain && count > 2) return centerMainSlots(inner, count, gap, ratio);
+  if (name == kCenterMain && count > 2) return centerMainSlots(inner, count, gap, ratio, weights);
   if (name == kMainStackTop) {
     const int usableHeight = std::max(2, inner.height() - gap);
     const int mainHeight =
@@ -203,14 +232,7 @@ std::vector<QRect> layoutSlots(const QString& layout, const QRect& area, int cou
   rects.emplace_back(inner.x(), inner.y(), mainWidth, inner.height());
   const int stackX = inner.x() + mainWidth + gap;
   const int stackWidth = std::max(1, inner.x() + inner.width() - stackX);
-  std::vector<double> stackWeights(static_cast<size_t>(count - 1), 1.0);
-  for (size_t i = 1; i < weights.size() && i < static_cast<size_t>(count); ++i) {
-    stackWeights[i - 1] = weights[i];
-  }
-  const bool even = std::all_of(stackWeights.begin(), stackWeights.end(),
-                                [&](double w) { return w == stackWeights.front(); });
-  const auto rows = even ? spans(inner.y(), inner.height(), count - 1, gap)
-                         : weightedSpans(inner.y(), inner.height(), gap, stackWeights);
+  const auto rows = sizedSpans(inner.y(), inner.height(), gap, pickWeights(weights, 1, count - 1));
   for (const auto& [y, h] : rows) rects.emplace_back(stackX, y, stackWidth, h);
   return rects;
 }
