@@ -48,6 +48,9 @@ namespace waku::tiling {
 //   dropTarget  during a "swap" drag, where the window would land: { active, kind ("swap",
 //             "stack", "monitor", "back"), screen (a ShellScreen name), x, y, width, height } in
 //             logical pixels from the top-left of that screen. TilingDropIndicator draws it
+//   resizePreview  while a tiled window is resized by mouse, where every tile of its workspace
+//             goes at the release (the neighbours move only then): { active, screen, rects:
+//             [{ x, y, width, height }] }, in the same coordinates. TilingDropIndicator draws it
 //
 // A shell turns it off with
 //   Component.onCompleted: { Tiling.enabled = false }
@@ -69,6 +72,7 @@ class Tiling : public QObject, public TilingControl {
   Q_PROPERTY(QString dragFloatModifier READ dragFloatModifier WRITE setDragFloatModifier NOTIFY
                  dragFloatModifierChanged FINAL)
   Q_PROPERTY(QVariantMap dropTarget READ dropTarget NOTIFY dropTargetChanged FINAL)
+  Q_PROPERTY(QVariantMap resizePreview READ resizePreview NOTIFY resizePreviewChanged FINAL)
 
  public:
   // Everything the service needs from the machine. A null placer or hooks (the offscreen
@@ -109,6 +113,7 @@ class Tiling : public QObject, public TilingControl {
   QString dragFloatModifier() const;
   void setDragFloatModifier(const QString& key);
   QVariantMap dropTarget() const { return dropTarget_; }
+  QVariantMap resizePreview() const { return resizePreview_; }
 
   // Floats a tiled focused window, or tiles a floating one.
   Q_INVOKABLE void toggleFloat();
@@ -163,6 +168,7 @@ class Tiling : public QObject, public TilingControl {
   void dragActionChanged();
   void dragFloatModifierChanged();
   void dropTargetChanged();
+  void resizePreviewChanged();
 
  private:
   void init(Deps deps);
@@ -171,6 +177,8 @@ class Tiling : public QObject, public TilingControl {
   void refreshCurrentLayout();
   // Publishes the engine's drop target in the logical coordinates of the screen that holds it.
   void updateDropTarget(const DropTarget& target);
+  // Publishes the engine's resize preview the same way.
+  void updateResizePreview(const ResizePreview& preview);
   void watchScreen(QScreen* screen);
   QString notActive() const;
   // Runs an engine command when the tiler is active; the answer line.
@@ -185,6 +193,7 @@ class Tiling : public QObject, public TilingControl {
   TilingSettings settings_;
   QVariantList rules_;
   QVariantMap dropTarget_;
+  QVariantMap resizePreview_;
   bool enabled_ = false;
   bool active_ = false;
   bool watchScreens_ = true;

@@ -176,6 +176,7 @@ TEST(TilingService, DragSettingsAreValidatedAndNotified) {
   QSignalSpy action(rig.tiling.get(), &Tiling::dragActionChanged);
   QSignalSpy key(rig.tiling.get(), &Tiling::dragFloatModifierChanged);
   EXPECT_EQ(rig.tiling->dragAction(), QStringLiteral("float"));
+  EXPECT_FALSE(rig.tiling->resizePreview().value(QStringLiteral("active")).toBool());
   EXPECT_EQ(rig.tiling->dragFloatModifier(), QStringLiteral("ctrl"));
   rig.tiling->setDragAction(QStringLiteral("Swap"));
   EXPECT_EQ(rig.tiling->dragAction(), QStringLiteral("swap"));

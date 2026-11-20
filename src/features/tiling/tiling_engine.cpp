@@ -175,13 +175,12 @@ std::optional<double> ratioFromEdge(const QString& shape, const QRect& area, int
 }
 
 // The weights of the pair `a` (the dragged window, in `slot`) and `b` (in `otherSlot`) that put the
-// shared edge at `at`. The pair keeps its sum and each stays inside the engine's bounds. False
-// when nothing changes.
-bool shareEdge(WorkspaceView& view, WindowId a, WindowId b, const QRect& slot,
+// shared edge at `at`. The pair keeps its sum and each stays inside the engine's bounds.
+void shareEdge(WorkspaceView& view, WindowId a, WindowId b, const QRect& slot,
                const QRect& otherSlot, Edge edge, int at) {
   const int pairLength =
       isVertical(edge) ? slot.width() + otherSlot.width() : slot.height() + otherSlot.height();
-  if (pairLength <= 1) return false;
+  if (pairLength <= 1) return;
   int wanted = 0;
   switch (edge) {
     case Edge::Left:
@@ -203,13 +202,12 @@ bool shareEdge(WorkspaceView& view, WindowId a, WindowId b, const QRect& slot,
   const double fraction = static_cast<double>(std::clamp(wanted, 1, pairLength - 1)) / pairLength;
   const double low = std::max(TilingEngine::kMinWeight, pair - TilingEngine::kMaxWeight);
   const double high = std::min(TilingEngine::kMaxWeight, pair - TilingEngine::kMinWeight);
-  if (low > high) return false;
+  if (low > high) return;
   const double next = std::clamp(pair * fraction, low, high);
   const double nextOther = pair - next;
-  if (std::abs(next - current) <= 0.0001 && std::abs(nextOther - other) <= 0.0001) return false;
+  if (std::abs(next - current) <= 0.0001 && std::abs(nextOther - other) <= 0.0001) return;
   view.weights[a] = next;
   view.weights[b] = nextOther;
-  return true;
 }
 
 // Where a window that is floated out of its tile goes: the size it had before the tiler first
@@ -295,6 +293,7 @@ void TilingEngine::stop() {
   moveDrags_.clear();
   dropped_.clear();
   publishDrop({});
+  publishPreview({});
   clamped_.clear();
   settling_.clear();
   verifying_.clear();
@@ -458,7 +457,7 @@ void TilingEngine::onMoveSizeEnd(WindowId hwnd) {
       hasResizeDrag ? drag->second.initialRatio : std::nullopt;
   const std::map<WindowId, double> initialWeights =
       hasResizeDrag ? drag->second.initialWeights : std::map<WindowId, double>{};
-  resizeDrags_.erase(hwnd);
+  endResizeDrag(hwnd);
   if (!model_.contains(hwnd)) return;
   if (paused_) return;  // nothing was placed, so there is nothing to compare with
   const std::optional<WindowFacts> facts = placer_.state(hwnd);
@@ -517,8 +516,11 @@ void TilingEngine::onLocationChange(WindowId hwnd) {
                        (edgeMoved(Edge::Top) && edgeMoved(Edge::Bottom)))) {
     drag.snapped = true;
   }
-  if (paused_ || !drag.resized || drag.snapped || drag.slotRects.size() != drag.active.size() ||
-      drag.active.size() < 2) {
+  if (paused_ || drag.snapped) {
+    publishPreview({});
+    return;
+  }
+  if (!drag.resized || drag.slotRects.size() != drag.active.size() || drag.active.size() < 2) {
     return;
   }
 
@@ -527,7 +529,6 @@ void TilingEngine::onLocationChange(WindowId hwnd) {
   const size_t index = static_cast<size_t>(at - drag.active.begin());
   const QString shape = resizeShape(drag.layout, drag.active.size());
   WorkspaceView& view = model_.edit(drag.key);
-  bool changed = false;
   // Each edge that moved: an inner one moves the boundary it shares with the tile across it, an
   // outer one (on the work area) goes back at the release.
   for (const Edge edge : {Edge::Left, Edge::Right, Edge::Top, Edge::Bottom}) {
@@ -541,19 +542,22 @@ void TilingEngine::onLocationChange(WindowId hwnd) {
             ratioFromEdge(shape, drag.area, drag.gap, index == 0, edge, position);
         if (ratio && (!view.ratio || std::abs(*view.ratio - *ratio) > 0.0001)) {
           view.ratio = *ratio;
-          changed = true;
         }
         break;
       }
       case EdgeRole::Weights:
-        changed |= shareEdge(view, hwnd, drag.active[*other], drag.slotRects[index],
-                             drag.slotRects[*other], edge, position);
+        shareEdge(view, hwnd, drag.active[*other], drag.slotRects[index], drag.slotRects[*other],
+                  edge, position);
         break;
       case EdgeRole::None:
         break;
     }
   }
-  if (changed) requestRetile(drag.key);
+  // The neighbours are placed once, at the release: a window moved on every mouse event cannot
+  // repaint that fast (black and stale frames, a column drifting apart), and one at its minimum
+  // size would cover the dragged one. Until then the shell draws where each tile goes. An outer
+  // edge changes nothing, and the preview shows the window going back.
+  publishPreview({drag.key.monitor, slotsFor(drag.key, drag.area, drag.active)});
 }
 
 // --- drag to swap
@@ -663,6 +667,17 @@ void TilingEngine::endMoveDrag(WindowId hwnd) {
   publishDrop({});
 }
 
+void TilingEngine::endResizeDrag(WindowId hwnd) {
+  if (resizeDrags_.erase(hwnd) == 0) return;
+  publishPreview({});
+}
+
+void TilingEngine::publishPreview(const ResizePreview& preview) {
+  if (preview == preview_) return;
+  preview_ = preview;
+  if (previewListener_) previewListener_(preview_);
+}
+
 void TilingEngine::publishDrop(const DropTarget& target) {
   if (target == drop_) return;
   drop_ = target;
@@ -749,7 +764,7 @@ void TilingEngine::forget(WindowId hwnd, bool dropFloat) {
   settling_.erase(hwnd);
   verifying_.erase(hwnd);
   moving_.erase(hwnd);
-  resizeDrags_.erase(hwnd);
+  endResizeDrag(hwnd);
   endMoveDrag(hwnd);
   dropped_.erase(hwnd);
   wasTop_.erase(hwnd);

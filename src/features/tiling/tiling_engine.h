@@ -48,6 +48,15 @@ struct TilingSettings {
 // other monitor's layout (Monitor); empty for Float and None.
 enum class DropKind { None, Swap, Stack, Monitor, Float, Back };
 
+// While a tiled window is resized by mouse, where every tile of its workspace goes at the release
+// (the tiles in stack order, in physical pixels on `monitor`). The neighbours are placed once, at
+// the release, so the shell draws this instead. No rects outside such a drag.
+struct ResizePreview {
+  MonitorId monitor = 0;
+  std::vector<QRect> rects;
+  friend bool operator==(const ResizePreview&, const ResizePreview&) = default;
+};
+
 struct DropTarget {
   DropKind kind = DropKind::None;
   MonitorId monitor = 0;
@@ -145,6 +154,12 @@ class TilingEngine {
   void setDropListener(std::function<void(const DropTarget&)> listener) {
     dropListener_ = std::move(listener);
   }
+  // Where the tiles go at the release of the resize drag now on; no rects outside one.
+  const ResizePreview& resizePreview() const { return preview_; }
+  // Called each time resizePreview() changes.
+  void setPreviewListener(std::function<void(const ResizePreview&)> listener) {
+    previewListener_ = std::move(listener);
+  }
 
   // Retiles every workspace of the shown desktop (a screen or work area change).
   void retileAll();
@@ -233,6 +248,9 @@ class TilingEngine {
   // Ends the Swap drag of the window, if any, and clears the drop target.
   void endMoveDrag(WindowId hwnd);
   void publishDrop(const DropTarget& target);
+  // Ends the resize drag of the window, if any, and clears the preview.
+  void endResizeDrag(WindowId hwnd);
+  void publishPreview(const ResizePreview& preview);
   // A newly managed window that moved by itself after its placement goes back to its slot.
   void onSettlingMove(WindowId hwnd);
   void raiseNewTops(const WorkspaceKey& key, const std::vector<WindowId>& active);
@@ -311,6 +329,8 @@ class TilingEngine {
   std::set<WindowId> dropped_;
   DropTarget drop_;
   std::function<void(const DropTarget&)> dropListener_;
+  ResizePreview preview_;
+  std::function<void(const ResizePreview&)> previewListener_;
   std::set<WindowId> clamped_;  // placed, but not at the size of its slot
   // Newly managed windows: the placements left to undo a change of their own bounds, the serial of
   // the settling period (a later period of the same window outlives this one's timer) and of the

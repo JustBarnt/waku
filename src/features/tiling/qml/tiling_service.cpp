@@ -47,6 +47,39 @@ QString dropKindText(DropKind kind) {
   return QString();
 }
 
+QVariantMap inactiveResizePreview() {
+  return {{QStringLiteral("active"), false},
+          {QStringLiteral("screen"), QString()},
+          {QStringLiteral("rects"), QVariantList()}};
+}
+
+// The screen in physical pixels. QScreen::geometry() on Windows keeps the physical origin with the
+// logical size, as in host::physicalScreenRect.
+QRect physicalGeometry(const QScreen* screen) {
+  const QRect geometry = screen->geometry();
+  const double dpr = screen->devicePixelRatio() > 0 ? screen->devicePixelRatio() : 1.0;
+  return QRect(geometry.topLeft(), QSize(static_cast<int>(std::lround(geometry.width() * dpr)),
+                                         static_cast<int>(std::lround(geometry.height() * dpr))));
+}
+
+// The screen whose physical rectangle holds `point` (physical pixels), or null.
+QScreen* screenHolding(const QPoint& point) {
+  if (!qGuiApp) return nullptr;
+  for (QScreen* screen : QGuiApplication::screens()) {
+    if (physicalGeometry(screen).contains(point)) return screen;
+  }
+  return nullptr;
+}
+
+// `rect` (physical pixels) in the logical pixels of `screen`, from its top-left corner.
+QRect logicalOn(const QScreen* screen, const QRect& rect) {
+  const QRect geometry = screen->geometry();
+  const double dpr = screen->devicePixelRatio() > 0 ? screen->devicePixelRatio() : 1.0;
+  const auto logical = [dpr](int value) { return static_cast<int>(std::lround(value / dpr)); };
+  return QRect(logical(rect.x() - geometry.x()), logical(rect.y() - geometry.y()),
+               logical(rect.width()), logical(rect.height()));
+}
+
 QVariantMap inactiveDropTarget() {
   return {{QStringLiteral("active"), false},
           {QStringLiteral("kind"), QString()},
@@ -76,8 +109,11 @@ void Tiling::init(Deps deps) {
   watchScreens_ = deps.watchScreens;
   if (placer_ && scheduler_) engine_ = std::make_unique<TilingEngine>(*placer_, *scheduler_);
   dropTarget_ = inactiveDropTarget();
+  resizePreview_ = inactiveResizePreview();
   if (engine_) {
     engine_->setDropListener([this](const DropTarget& target) { updateDropTarget(target); });
+    engine_->setPreviewListener(
+        [this](const ResizePreview& preview) { updateResizePreview(preview); });
   }
 
   screenTimer_.setSingleShot(true);
@@ -270,30 +306,41 @@ void Tiling::updateDropTarget(const DropTarget& target) {
   const bool drawn = target.kind == DropKind::Swap || target.kind == DropKind::Stack ||
                      target.kind == DropKind::Monitor || target.kind == DropKind::Back;
   next[QStringLiteral("kind")] = dropKindText(target.kind);
-  if (drawn && !target.rect.isEmpty() && qGuiApp) {
-    // QScreen::geometry() on Windows keeps the physical origin with the logical size (as in
-    // host::physicalScreenRect): the screen whose physical rectangle holds the centre is the one.
-    const QPoint centre = target.rect.center();
-    for (QScreen* screen : QGuiApplication::screens()) {
-      const QRect geometry = screen->geometry();
-      const double dpr = screen->devicePixelRatio() > 0 ? screen->devicePixelRatio() : 1.0;
-      const QRect physical(geometry.topLeft(),
-                           QSize(static_cast<int>(std::lround(geometry.width() * dpr)),
-                                 static_cast<int>(std::lround(geometry.height() * dpr))));
-      if (!physical.contains(centre)) continue;
-      const auto logical = [dpr](int value) { return static_cast<int>(std::lround(value / dpr)); };
+  if (drawn && !target.rect.isEmpty()) {
+    if (QScreen* screen = screenHolding(target.rect.center())) {
+      const QRect logical = logicalOn(screen, target.rect);
       next[QStringLiteral("active")] = true;
       next[QStringLiteral("screen")] = screen->name();
-      next[QStringLiteral("x")] = logical(target.rect.x() - geometry.x());
-      next[QStringLiteral("y")] = logical(target.rect.y() - geometry.y());
-      next[QStringLiteral("width")] = logical(target.rect.width());
-      next[QStringLiteral("height")] = logical(target.rect.height());
-      break;
+      next[QStringLiteral("x")] = logical.x();
+      next[QStringLiteral("y")] = logical.y();
+      next[QStringLiteral("width")] = logical.width();
+      next[QStringLiteral("height")] = logical.height();
     }
   }
   if (next == dropTarget_) return;
   dropTarget_ = std::move(next);
   emit dropTargetChanged();
+}
+
+void Tiling::updateResizePreview(const ResizePreview& preview) {
+  QVariantMap next = inactiveResizePreview();
+  QScreen* screen = preview.rects.empty() ? nullptr : screenHolding(preview.rects.front().center());
+  if (screen) {
+    QVariantList rects;
+    for (const QRect& rect : preview.rects) {
+      const QRect logical = logicalOn(screen, rect);
+      rects.append(QVariantMap{{QStringLiteral("x"), logical.x()},
+                               {QStringLiteral("y"), logical.y()},
+                               {QStringLiteral("width"), logical.width()},
+                               {QStringLiteral("height"), logical.height()}});
+    }
+    next[QStringLiteral("active")] = true;
+    next[QStringLiteral("screen")] = screen->name();
+    next[QStringLiteral("rects")] = rects;
+  }
+  if (next == resizePreview_) return;
+  resizePreview_ = std::move(next);
+  emit resizePreviewChanged();
 }
 
 // --- commands

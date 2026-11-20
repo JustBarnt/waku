@@ -441,16 +441,14 @@ TEST(TilingEngine, AClickOnATitleBarWithoutAMoveKeepsTheWindowTiled) {
   EXPECT_FALSE(rig.engine.model().isFloating(2));
 }
 
-TEST(TilingEngine, MainStackDividerResizeUpdatesRatioAndNeighborsDuringDrag) {
+TEST(TilingEngine, AMainStackDividerDragShowsAPreviewAndPlacesTheNeighboursAtTheRelease) {
   Rig rig;
   rig.engine.start();
   rig.open(1);
   rig.open(2);
   const QRect oldMain = rig.placer.windows[1].rect;
   const QRect oldStack = rig.placer.lastSlot(2);
-  rig.placer.onPlace = [&rig](WindowId hwnd, const QRect&) {
-    rig.send(EventKind::LocationChange, hwnd);
-  };
+  const size_t placements = rig.placer.placements.size();
 
   rig.send(EventKind::MoveSizeStart, 1);
   ASSERT_TRUE(rig.engine.tracksMouseResize(1));
@@ -461,14 +459,21 @@ TEST(TilingEngine, MainStackDividerResizeUpdatesRatioAndNeighborsDuringDrag) {
   const WorkspaceKey key = *rig.engine.model().keyOf(1);
   ASSERT_TRUE(rig.engine.model().view(key).ratio.has_value());
   EXPECT_GT(*rig.engine.model().view(key).ratio, 0.5);
-  EXPECT_LT(rig.placer.lastSlot(2).width(), oldStack.width());
-  EXPECT_TRUE(rig.engine.model().contains(1));
-  EXPECT_FALSE(rig.engine.model().isFloating(1));
+  // Nothing moves during the drag: the preview shows where the tiles go.
+  EXPECT_EQ(rig.placer.placements.size(), placements);
+  const ResizePreview shown = rig.engine.resizePreview();
+  EXPECT_EQ(shown.monitor, kMonitorA);
+  ASSERT_EQ(shown.rects.size(), 2u);
+  EXPECT_NEAR(shown.rects[0].width(), oldMain.width() + 120, 1);
+  EXPECT_LT(shown.rects[1].width(), oldStack.width());
 
   rig.send(EventKind::MoveSizeEnd, 1);
   rig.settle();
+  EXPECT_TRUE(rig.engine.resizePreview().rects.empty());
   EXPECT_FALSE(rig.engine.tracksMouseResize(1));
+  EXPECT_EQ(rig.placer.lastSlot(2), shown.rects[1]);
   EXPECT_TRUE(rig.engine.model().contains(1));
+  EXPECT_FALSE(rig.engine.model().isFloating(1));
 }
 
 TEST(TilingEngine, MainStackResizeConsumesEndGeometryWithoutALocationEvent) {
@@ -540,9 +545,9 @@ TEST(TilingEngine, MainStackResizeUsesTheSharedEdgeAfterAHorizontalFlip) {
 
   ASSERT_TRUE(rig.engine.model().view(key).ratio.has_value());
   EXPECT_LT(*rig.engine.model().view(key).ratio, 0.5);
-  EXPECT_LT(rig.placer.lastSlot(1).width(), oldMain.width());
   rig.send(EventKind::MoveSizeEnd, 2);
   rig.settle();
+  EXPECT_LT(rig.placer.lastSlot(1).width(), oldMain.width());
   EXPECT_TRUE(rig.engine.model().contains(2));
   EXPECT_FALSE(rig.engine.model().isFloating(2));
 }
@@ -610,9 +615,9 @@ TEST(TilingEngine, MainStackStackResizeChangesWeightsAndFollowsVerticalFlip) {
   const auto& weights = rig.engine.model().view(key).weights;
   ASSERT_NE(weights.find(2), weights.end());
   EXPECT_GT(weights.at(2), 1.0);
-  EXPECT_LT(rig.placer.lastSlot(3).height(), oldThird.height());
   rig.send(EventKind::MoveSizeEnd, 2);
   rig.settle();
+  EXPECT_LT(rig.placer.lastSlot(3).height(), oldThird.height());
   EXPECT_TRUE(rig.engine.model().contains(2));
   EXPECT_FALSE(rig.engine.model().isFloating(2));
 }
@@ -641,10 +646,10 @@ TEST(TilingEngine, ResizingAStackedSlotKeepsItsWindowsTogether) {
   rig.send(EventKind::LocationChange, 4);
   rig.settle();
 
-  EXPECT_NE(rig.placer.lastSlot(hidden), oldSlot);
   EXPECT_TRUE(rig.engine.model().contains(hidden));
   rig.send(EventKind::MoveSizeEnd, 4);
   rig.settle();
+  EXPECT_NE(rig.placer.lastSlot(hidden), oldSlot);
   EXPECT_TRUE(rig.engine.model().contains(4));
   EXPECT_EQ(rig.placer.windows[hidden].rect, rig.placer.windows[4].rect);
 }
@@ -719,10 +724,14 @@ TEST(TilingEngine, AColumnsDividerDragResizesTheTwoColumnsBesideIt) {
   EXPECT_GT(weightOf(rig, 1), 1.0);
   EXPECT_LT(weightOf(rig, 2), 1.0);
   EXPECT_DOUBLE_EQ(weightOf(rig, 3), 1.0);
-  EXPECT_NEAR(rig.placer.windows[2].rect.x(), rig.placer.windows[1].rect.right() + 1 + kGap, 1);
-  EXPECT_NEAR(rig.placer.windows[3].rect.x(), third.x(), 1);
+  const ResizePreview shown = rig.engine.resizePreview();
+  ASSERT_EQ(shown.rects.size(), 3u);
+  EXPECT_NEAR(shown.rects[1].x(), rig.placer.windows[1].rect.right() + 1 + kGap, 1);
+  EXPECT_NEAR(shown.rects[2].x(), third.x(), 1);
   rig.send(EventKind::MoveSizeEnd, 1);
   rig.settle();
+  EXPECT_NEAR(rig.placer.windows[2].rect.x(), rig.placer.windows[1].rect.right() + 1 + kGap, 1);
+  EXPECT_NEAR(rig.placer.windows[3].rect.x(), third.x(), 1);
   EXPECT_FALSE(rig.engine.model().isFloating(1));
   EXPECT_NEAR(rig.placer.windows[1].rect.width(), first.width() + 120, 1);
 }
@@ -738,10 +747,12 @@ TEST(TilingEngine, ARowsDividerDragResizesTheTwoBandsBesideIt) {
   rig.settle();
   EXPECT_GT(weightOf(rig, 2), 1.0);
   EXPECT_LT(weightOf(rig, 1), 1.0);
-  EXPECT_NEAR(rig.placer.windows[1].rect.bottom() + 1 + kGap, rig.placer.windows[2].rect.y(), 1);
-  EXPECT_EQ(rig.placer.windows[3].rect, third);
+  ASSERT_EQ(rig.engine.resizePreview().rects.size(), 3u);
+  EXPECT_EQ(rig.engine.resizePreview().rects[2], third);
   rig.send(EventKind::MoveSizeEnd, 2);
   rig.settle();
+  EXPECT_NEAR(rig.placer.windows[1].rect.bottom() + 1 + kGap, rig.placer.windows[2].rect.y(), 1);
+  EXPECT_EQ(rig.placer.windows[3].rect, third);
   EXPECT_FALSE(rig.engine.model().isFloating(2));
 }
 
@@ -770,11 +781,16 @@ TEST(TilingEngine, AColumnsDragFollowsAHorizontalFlipAndACancelRestoresIt) {
   rig.send(EventKind::LocationChange, 1);
   rig.settle();
   EXPECT_GT(weightOf(rig, 1), 1.0);
-  EXPECT_NEAR(rig.placer.windows[2].rect.right() + 1 + kGap, rig.placer.windows[1].rect.x(), 1);
+  ASSERT_EQ(rig.engine.resizePreview().rects.size(), 2u);
+  EXPECT_NEAR(rig.engine.resizePreview().rects[1].right() + 1 + kGap,
+              rig.placer.windows[1].rect.x(), 1);
+  const size_t placements = rig.placer.placements.size();
   rig.placer.windows[1].rect = original;  // Esc: Windows puts it back
   rig.send(EventKind::MoveSizeEnd, 1);
   rig.settle();
   EXPECT_TRUE(rig.engine.model().view(*rig.engine.model().keyOf(1)).weights.empty());
+  EXPECT_TRUE(rig.engine.resizePreview().rects.empty());
+  EXPECT_EQ(rig.placer.placements.size(), placements);  // nothing had moved
   EXPECT_EQ(rig.placer.windows[2].rect,
             flipSlots(layoutSlots(QStringLiteral("columns"), kAreaA, 2, kGap, 0.5), kAreaA, true,
                       false)[1]);
@@ -792,10 +808,10 @@ TEST(TilingEngine, CenterMainKeepsItsSidesEqualWhenTheMainEdgeIsDragged) {
   const WorkspaceKey key = *rig.engine.model().keyOf(1);
   ASSERT_TRUE(rig.engine.model().view(key).ratio.has_value());
   EXPECT_GT(*rig.engine.model().view(key).ratio, 0.5);
-  EXPECT_NEAR(rig.placer.windows[2].rect.width(), rig.placer.windows[3].rect.width(), 1);
-  EXPECT_NEAR(rig.placer.windows[3].rect.width(), left.width() - 100, 2);
   rig.send(EventKind::MoveSizeEnd, 1);
   rig.settle();
+  EXPECT_NEAR(rig.placer.windows[2].rect.width(), rig.placer.windows[3].rect.width(), 1);
+  EXPECT_NEAR(rig.placer.windows[3].rect.width(), left.width() - 100, 2);
   // Centred: its left edge went out by as much.
   EXPECT_NEAR(rig.placer.windows[1].rect.x(), main.x() - 100, 2);
   EXPECT_NEAR(rig.placer.windows[1].rect.width(), main.width() + 200, 2);
@@ -812,6 +828,8 @@ TEST(TilingEngine, CenterMainSideWindowsInnerEdgeMovesTheRatio) {
   const WorkspaceKey key = *rig.engine.model().keyOf(1);
   ASSERT_TRUE(rig.engine.model().view(key).ratio.has_value());
   EXPECT_LT(*rig.engine.model().view(key).ratio, 0.5);
+  rig.send(EventKind::MoveSizeEnd, 2);
+  rig.settle();
   EXPECT_NEAR(rig.placer.windows[1].rect.right() + 1 + kGap, right.x() - 80, 2);
 }
 
@@ -828,6 +846,8 @@ TEST(TilingEngine, CenterMainSideColumnsResizeTheirOwnWindowsOnly) {
   EXPECT_GT(weightOf(rig, 2), 1.0);
   EXPECT_LT(weightOf(rig, 4), 1.0);
   EXPECT_DOUBLE_EQ(weightOf(rig, 3), 1.0);
+  rig.send(EventKind::MoveSizeEnd, 2);
+  rig.settle();
   EXPECT_NEAR(rig.placer.windows[4].rect.y(), rig.placer.windows[2].rect.bottom() + 1 + kGap, 1);
   EXPECT_EQ(rig.placer.windows[3].rect, third);
   EXPECT_EQ(rig.placer.windows[5].rect, fifth);
@@ -843,6 +863,8 @@ TEST(TilingEngine, CenterMainWithTwoWindowsResizesAsMainStack) {
   rig.send(EventKind::LocationChange, 1);
   rig.settle();
   EXPECT_GT(*rig.engine.model().view(*rig.engine.model().keyOf(1)).ratio, 0.5);
+  rig.send(EventKind::MoveSizeEnd, 1);
+  rig.settle();
   EXPECT_NEAR(rig.placer.windows[2].rect.x(), main.right() + 1 + 120 + kGap, 1);
 }
 
@@ -856,6 +878,7 @@ TEST(TilingEngine, AWindowsSnapAtTheReleaseFloatsItInAResizableLayout) {
   rig.placer.windows[2].rect = QRect(0, 0, 960, 1040);  // snapped to the left half
   rig.send(EventKind::MoveSizeEnd, 2);
   rig.settle();
+  EXPECT_TRUE(rig.engine.resizePreview().rects.empty());
   EXPECT_TRUE(rig.engine.model().isFloating(2));
   EXPECT_FALSE(rig.engine.model().view(*rig.engine.model().keyOf(1)).ratio.has_value());
   EXPECT_EQ(rig.placer.lastSlot(1), rig.slot(0, 1));

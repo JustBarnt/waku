@@ -201,7 +201,8 @@ alt-tab or minimize the fullscreen window. Exit native fullscreen with the appli
 shortcut to return to tiling.
 
 In `mainStack`, `columns`, `rows` and `centerMain`, drag a window border or corner to resize its
-tile. Neighbors follow shared-divider changes during the drag. In `centerMain` the main window
+tile. The other tiles move when you release; while you drag, `TilingDropIndicator` (see below)
+outlines where every tile will go. In `centerMain` the main window
 stays centered: dragging one of its sides moves the other side too, and the windows of each side
 column resize against each other by height. Outer edges snap back into the work area on release.
 A Windows Snap at a screen edge floats the window. Sizes you give a layout are dropped when the
@@ -220,7 +221,8 @@ Hold Ctrl when you release to float the window instead; `Tiling.dragFloatModifie
 key (`"alt"` or `"shift"`). A Windows Snap at a screen edge still floats the window. Stacks are
 still made with `tile stack`, not by dragging.
 
-`TilingDropIndicator` shows where the window will land while you drag. Add it once to the shell.
+`TilingDropIndicator` shows where the window will land while you drag, and the tiles' new sizes
+while you resize one. Add it once to the shell.
 Its colours follow the waku `Theme`; a shell with its own colours binds them:
 
 ```qml

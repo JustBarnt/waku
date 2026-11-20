@@ -60,9 +60,8 @@ waku's own process are skipped by the hook (`WINEVENT_SKIPOWNPROCESS`).
 - **User intent.** `MoveSizeStart` remembers the bounds. A title-bar translation floats the
   window at `MoveSizeEnd` (with `Tiling.dragAction: "swap"` it drops it instead, see Drag to
   swap). In `mainStack`, `columns`, `rows` and `centerMain`, a size change remains tiled and moves
-  the boundary it was dragged on (see Mouse resize). The neighbours are retiled while the dragged
-  window is held, so it cannot feed its own placement back into the resize. Flipped layouts use
-  the same shared edges. Outer edges stay constrained to the work area, gaps remain intact, and the
+  the boundary it was dragged on (see Mouse resize). The neighbours are placed at the release, a
+  preview shows them until then. Flipped layouts use the same shared edges. Outer edges stay constrained to the work area, gaps remain intact, and the
   window is placed back into its final slot on release. Other layouts keep the prior
   move/resize-floats behavior. A clamped window is compared against the bounds it had at
   the start. Cancellation restores the starting sizing; destroy, stop and cancellation clear
@@ -245,9 +244,16 @@ Later).
 ### Behaviour
 
 A drag of an inner edge (one that another tile shares) moves the boundary between the tiles that
-share it, live: the other windows are placed again while the dragged one is held. An outer edge
-(on the work area) goes back at the release, a corner drag changes both of its edges, and a
-cancelled drag (Esc) restores the sizes it started with.
+share it. Only the dragged window changes while the button is held (Windows sizes it); the others
+are placed once, at the release, and until then `Tiling.resizePreview` gives every tile of the
+workspace at the size it will get, which `TilingDropIndicator` outlines. An outer edge (on the
+work area) goes back at the release, a corner drag changes both of its edges, and a cancelled drag
+(Esc) restores the sizes it started with and moves nothing.
+
+The neighbours were first placed live, on every location event. That does not hold up: 2 to 4
+`SetWindowPos` calls per mouse event are more than Electron, CEF and Firefox windows repaint, so
+they show black and stale frames and the windows of one column drift apart as each lags by its own
+amount, and a neighbour at its minimum size covers the dragged window until the release.
 
 | Layout | Edge dragged | What changes |
 |---|---|---|
@@ -297,7 +303,10 @@ flips are already in them) and:
 - **ratio** (`ratioFromEdge`): `mainStack`, the main width over the width left by the gaps;
   `centerMain`, the main width that keeps it centred, `2 * (edge - (inner.x + gap)) - usable` for
   its right edge and the mirror for its left, over `usable`; clamped to 0.1..0.9;
-- **weights** (`shareEdge`): the share the pair needs for the edge to be where it is now.
+- **weights** (`shareEdge`): the share the pair needs for the edge to be where it is now;
+- **publishes the preview** (`ResizePreview`: `slotsFor` over the tiles at the start, with the
+  ratio and weights as they now are) instead of retiling. `MoveSizeEnd`, destroy, stop, pause and
+  a Snap clear it; the release retiles the workspace once.
 
 A numeric search was weighed (re-run `layoutSlots` and bisect the setting until the edge lands
 under the cursor): it would cover every layout with less code each, but for these the two
