@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QPoint>
 #include <QRect>
 #include <QString>
 #include <cstdint>
@@ -33,6 +34,27 @@ struct WindowFacts {
   MonitorId monitor = 0;  // the monitor with the largest share of the window
   QRect rect;             // the visible bounds (without the invisible resize border)
   QString desktopId;      // the virtual desktop GUID; empty when unknown
+};
+
+// A modifier key the tiler reads during a drag, and the ones held down at one moment.
+enum class ModifierKey { Ctrl, Alt, Shift };
+
+struct HeldKeys {
+  bool ctrl = false;
+  bool alt = false;
+  bool shift = false;
+
+  bool holds(ModifierKey key) const {
+    switch (key) {
+      case ModifierKey::Ctrl:
+        return ctrl;
+      case ModifierKey::Alt:
+        return alt;
+      case ModifierKey::Shift:
+        return shift;
+    }
+    return false;
+  }
 };
 
 struct PlaceResult {
@@ -72,6 +94,16 @@ class WindowPlacer {
   virtual bool close(WindowId hwnd) = 0;
   // Minimizes the window.
   virtual bool minimize(WindowId hwnd) = 0;
+  // The cursor in physical pixels (the coordinates of workArea); nothing when Windows does not
+  // say. Read during a drag.
+  virtual std::optional<QPoint> cursorPosition() { return std::nullopt; }
+  // The monitor that holds `point` (physical pixels); 0 when none does.
+  virtual MonitorId monitorAt(const QPoint& point) {
+    (void)point;
+    return 0;
+  }
+  // The modifier keys held down now.
+  virtual HeldKeys heldKeys() { return {}; }
 };
 
 // The real placer (win32/window_placer_win.cpp).

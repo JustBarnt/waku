@@ -29,11 +29,19 @@ class FakeHooks final : public TilingHooks {
     sink_ = nullptr;
   }
   bool installed() const { return static_cast<bool>(sink_); }
+  void trackLocation(WindowId hwnd, bool enabled) override {
+    if (enabled) {
+      tracked = hwnd;
+    } else if (tracked == hwnd || hwnd == 0) {
+      tracked = 0;
+    }
+  }
   void fire(EventKind kind, WindowId hwnd) {
     if (sink_) sink_({kind, hwnd});
   }
   int installs = 0;
   int uninstalls = 0;
+  WindowId tracked = 0;  // the window whose location events are wanted
   bool allow = true;
 
  private:
@@ -161,6 +169,53 @@ TEST(TilingService, SettingsAreValidatedAndNotified) {
                          QStringLiteral("columns"), QStringLiteral("rows"), QStringLiteral("bsp"),
                          QStringLiteral("grid"), QStringLiteral("centerMain")}));
   EXPECT_DOUBLE_EQ(TilingSettings().ratio, 0.5);
+}
+
+TEST(TilingService, DragSettingsAreValidatedAndNotified) {
+  Rig rig;
+  QSignalSpy action(rig.tiling.get(), &Tiling::dragActionChanged);
+  QSignalSpy key(rig.tiling.get(), &Tiling::dragFloatModifierChanged);
+  EXPECT_EQ(rig.tiling->dragAction(), QStringLiteral("float"));
+  EXPECT_EQ(rig.tiling->dragFloatModifier(), QStringLiteral("ctrl"));
+  rig.tiling->setDragAction(QStringLiteral("Swap"));
+  EXPECT_EQ(rig.tiling->dragAction(), QStringLiteral("swap"));
+  rig.tiling->setDragAction(QStringLiteral("throw"));  // unknown: ignored
+  EXPECT_EQ(rig.tiling->dragAction(), QStringLiteral("swap"));
+  rig.tiling->setDragFloatModifier(QStringLiteral("ALT"));
+  EXPECT_EQ(rig.tiling->dragFloatModifier(), QStringLiteral("alt"));
+  rig.tiling->setDragFloatModifier(QStringLiteral("win"));  // unknown: ignored
+  EXPECT_EQ(rig.tiling->dragFloatModifier(), QStringLiteral("alt"));
+  EXPECT_EQ(action.count(), 1);
+  EXPECT_EQ(key.count(), 1);
+  ASSERT_NE(rig.tiling->engine(), nullptr);
+  EXPECT_EQ(rig.tiling->engine()->settings().dragAction, DragAction::Swap);
+  EXPECT_EQ(rig.tiling->engine()->settings().dragFloatKey, ModifierKey::Alt);
+}
+
+TEST(TilingService, ASwapDragPublishesItsDropTargetAndTracksLocation) {
+  Rig rig;
+  rig.tiling->setDragAction(QStringLiteral("swap"));
+  rig.placer->add(1);
+  rig.placer->add(2);
+  rig.tiling->setEnabled(true);
+  rig.scheduler->runAll();
+  EXPECT_EQ(rig.tiling->dropTarget().value(QStringLiteral("active")).toBool(), false);
+  QSignalSpy changed(rig.tiling.get(), &Tiling::dropTargetChanged);
+
+  rig.hooks->fire(EventKind::MoveSizeStart, 2);
+  EXPECT_EQ(rig.hooks->tracked, 2u);
+  const QRect main = rig.placer->windows[1].rect;
+  rig.placer->windows[2].rect.moveCenter(main.center());
+  rig.placer->cursor = main.center();
+  rig.hooks->fire(EventKind::LocationChange, 2);
+  EXPECT_EQ(rig.tiling->dropTarget().value(QStringLiteral("kind")).toString(),
+            QStringLiteral("swap"));
+  EXPECT_GE(changed.count(), 1);
+
+  rig.hooks->fire(EventKind::MoveSizeEnd, 2);
+  EXPECT_EQ(rig.hooks->tracked, 0u);
+  EXPECT_EQ(rig.tiling->dropTarget().value(QStringLiteral("active")).toBool(), false);
+  EXPECT_EQ(rig.tiling->dropTarget().value(QStringLiteral("kind")).toString(), QString());
 }
 
 TEST(TilingService, RulesFromTheShellReachTheEngine) {

@@ -202,7 +202,30 @@ shortcut to return to tiling.
 
 In `mainStack`, drag a window border or corner to resize its tile. Neighbors follow shared-divider
 changes during the drag. Outer edges snap back into the work area on release. Dragging the title
-bar still floats the window; other layouts retain their move/resize-to-float behavior.
+bar floats the window by default; other layouts retain their move/resize-to-float behavior.
+
+To rearrange tiles with the mouse instead, set `Tiling.dragAction` to `"swap"`. A title-bar drag
+then drops the window where you release it:
+
+- on another tile: the two trade places (a stack moves as a whole);
+- on a stack: the window joins it and shows on top;
+- on another monitor: the window joins that monitor's layout at the end;
+- on its own tile or a gap between tiles: it goes back to its tile.
+
+Hold Ctrl when you release to float the window instead; `Tiling.dragFloatModifier` picks another
+key (`"alt"` or `"shift"`). A Windows Snap at a screen edge still floats the window. Stacks are
+still made with `tile stack`, not by dragging.
+
+`TilingDropIndicator` shows where the window will land while you drag. Add it once to the shell.
+Its colours follow the waku `Theme`; a shell with its own colours binds them:
+
+```qml
+Component.onCompleted: { Tiling.dragAction = "swap" }
+
+TilingDropIndicator {}
+// or, in a shell with its own palette:
+TilingDropIndicator { color: Color.mPrimary; radius: 12 }
+```
 
 Most actions operate on the foreground window and its workspace:
 

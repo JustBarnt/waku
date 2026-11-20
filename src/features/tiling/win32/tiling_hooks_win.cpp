@@ -1,7 +1,8 @@
 // The WinEvent hooks of the tiler: documented SetWinEventHook only (through kernel::WinEventHook),
 // out of context, so waku is never injected into another process and the callbacks run on the GUI
-// thread. One range hook per event group. Location changes are hooked only for an active managed
-// mainStack resize and are filtered to that window.
+// thread. One range hook per event group. Location changes are hooked only while the engine wants
+// them for one window (a managed mainStack resize, a drag under Tiling.dragAction "swap") and are
+// filtered to that window.
 #include <windows.h>
 
 #include <utility>

@@ -24,6 +24,8 @@ waku_feature(
   QML_SOURCES
     qml/tiling_service.h
     qml/tiling_service.cpp
+  QML_FILES
+    qml/TilingDropIndicator.qml
   TESTS
     tests/test_tiling_command.cpp
     tests/test_tiling_engine.cpp

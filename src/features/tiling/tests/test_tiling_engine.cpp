@@ -699,6 +699,294 @@ TEST(TilingEngine, AWindowIsNotPlacedWhileTheUserHoldsIt) {
   EXPECT_EQ(rig.placer.slotsOf(2).size(), before);
 }
 
+namespace {
+
+// Title-bar drags drop the window where the cursor is released.
+void swapDrags(Rig& rig) {
+  TilingSettings settings = rig.engine.settings();
+  settings.dragAction = DragAction::Swap;
+  rig.engine.setSettings(settings);
+}
+
+// The user drags `hwnd` by its title bar: the window follows the cursor to `to`, keeping its size.
+void dragTo(Rig& rig, WindowId hwnd, const QPoint& to) {
+  rig.placer.windows[hwnd].rect.moveCenter(to);
+  rig.placer.cursor = to;
+  rig.send(EventKind::LocationChange, hwnd);
+}
+
+// Every drop target the engine published, in order.
+std::vector<DropTarget>& recordDrops(Rig& rig) {
+  static std::vector<DropTarget> drops;
+  drops.clear();
+  rig.engine.setDropListener([](const DropTarget& target) { drops.push_back(target); });
+  return drops;
+}
+
+}  // namespace
+
+TEST(TilingEngine, ASwapDragOntoAnotherTileTradesTheirPlaces) {
+  Rig rig;
+  swapDrags(rig);
+  rig.engine.start();
+  rig.open(1);
+  rig.open(2);
+  rig.send(EventKind::MoveSizeStart, 2);
+  EXPECT_TRUE(rig.engine.tracksLocation(2));
+  dragTo(rig, 2, rig.slot(0, 2).center());
+  EXPECT_EQ(rig.engine.dropTarget().kind, DropKind::Swap);
+  EXPECT_EQ(rig.engine.dropTarget().window, 1u);
+  EXPECT_EQ(rig.engine.dropTarget().rect, rig.slot(0, 2));
+  rig.send(EventKind::MoveSizeEnd, 2);
+  rig.settle();
+  EXPECT_EQ(rig.engine.dropTarget().kind, DropKind::None);
+  EXPECT_FALSE(rig.engine.tracksLocation(2));
+  EXPECT_FALSE(rig.engine.model().isFloating(2));
+  // Released exactly over the tile at the same size: the engine has nothing to move for it.
+  EXPECT_EQ(rig.placer.windows[2].rect, rig.slot(0, 2));
+  EXPECT_EQ(rig.placer.lastSlot(1), rig.slot(1, 2));
+}
+
+TEST(TilingEngine, ASwapDragOntoAStackJoinsIt) {
+  Rig rig;
+  swapDrags(rig);
+  rig.engine.start();
+  rig.open(1);
+  rig.open(2);
+  rig.open(3);
+  rig.placer.front = 3;
+  ASSERT_TRUE(rig.engine.stackDirection(Direction::Up).ok);  // 3 onto 2: the right tile
+  rig.settle();
+  rig.send(EventKind::MoveSizeStart, 1);
+  dragTo(rig, 1, rig.slot(1, 2).center());
+  EXPECT_EQ(rig.engine.dropTarget().kind, DropKind::Stack);
+  EXPECT_EQ(rig.engine.dropTarget().window, 3u);
+  rig.send(EventKind::MoveSizeEnd, 1);
+  rig.settle();
+  EXPECT_EQ(rig.engine.model().stackOf(1).size(), 3u);
+  EXPECT_TRUE(rig.engine.model().isTop(1));
+  EXPECT_EQ(rig.placer.lastSlot(1), rig.slot(0, 1));  // one tile left, the whole area
+}
+
+TEST(TilingEngine, ASwapDragOfAStackTopCarriesTheStack) {
+  Rig rig;
+  swapDrags(rig);
+  rig.engine.start();
+  rig.open(1);
+  rig.open(2);
+  rig.open(3);
+  rig.placer.front = 3;
+  ASSERT_TRUE(rig.engine.stackDirection(Direction::Up).ok);  // [2, 3] on the right, 3 on top
+  rig.settle();
+  rig.send(EventKind::MoveSizeStart, 3);
+  dragTo(rig, 3, rig.slot(0, 2).center());
+  EXPECT_EQ(rig.engine.dropTarget().kind, DropKind::Swap);
+  rig.send(EventKind::MoveSizeEnd, 3);
+  rig.settle();
+  EXPECT_EQ(rig.placer.windows[3].rect, rig.slot(0, 2));  // released right over it
+  EXPECT_EQ(rig.placer.lastSlot(2), rig.slot(0, 2));
+  EXPECT_EQ(rig.placer.lastSlot(1), rig.slot(1, 2));
+  EXPECT_EQ(rig.engine.model().stackOf(3).size(), 2u);
+}
+
+TEST(TilingEngine, ASwapDragReleasedOverItsOwnTileOrAGapGoesBack) {
+  Rig rig;
+  swapDrags(rig);
+  rig.engine.start();
+  rig.open(1);
+  rig.open(2);
+  rig.send(EventKind::MoveSizeStart, 2);
+  dragTo(rig, 2, rig.slot(1, 2).center() + QPoint(60, 40));
+  EXPECT_EQ(rig.engine.dropTarget().kind, DropKind::Back);
+  EXPECT_EQ(rig.engine.dropTarget().rect, rig.slot(1, 2));
+  // Between the two tiles.
+  const QPoint gap(rig.slot(0, 2).right() + kGap / 2 + 1, rig.slot(0, 2).center().y());
+  dragTo(rig, 2, gap);
+  EXPECT_EQ(rig.engine.dropTarget().kind, DropKind::Back);
+  rig.send(EventKind::MoveSizeEnd, 2);
+  rig.settle();
+  EXPECT_FALSE(rig.engine.model().isFloating(2));
+  EXPECT_EQ(rig.placer.windows[2].rect, rig.slot(1, 2));
+  EXPECT_EQ(rig.placer.windows[1].rect, rig.slot(0, 2));
+}
+
+TEST(TilingEngine, TheFloatKeyHeldAtTheReleaseFloatsTheWindow) {
+  Rig rig;
+  swapDrags(rig);
+  rig.engine.start();
+  rig.open(1);
+  rig.open(2);
+  rig.open(3);
+  rig.send(EventKind::MoveSizeStart, 2);
+  rig.placer.keys.alt = true;  // not the float key (Ctrl by default)
+  dragTo(rig, 2, rig.slot(0, 3).center());
+  EXPECT_EQ(rig.engine.dropTarget().kind, DropKind::Swap);
+  rig.placer.keys.ctrl = true;
+  dragTo(rig, 2, rig.slot(0, 3).center() + QPoint(5, 5));
+  EXPECT_EQ(rig.engine.dropTarget().kind, DropKind::Float);
+  EXPECT_TRUE(rig.engine.dropTarget().rect.isEmpty());
+  rig.send(EventKind::MoveSizeEnd, 2);
+  rig.settle();
+  EXPECT_TRUE(rig.engine.model().isFloating(2));
+  EXPECT_EQ(rig.placer.lastSlot(1), rig.slot(0, 2));
+  EXPECT_EQ(rig.placer.lastSlot(3), rig.slot(1, 2));
+}
+
+TEST(TilingEngine, TheFloatKeyIsASetting) {
+  Rig rig;
+  swapDrags(rig);
+  TilingSettings settings = rig.engine.settings();
+  settings.dragFloatKey = ModifierKey::Shift;
+  rig.engine.setSettings(settings);
+  rig.engine.start();
+  rig.open(1);
+  rig.open(2);
+  rig.send(EventKind::MoveSizeStart, 2);
+  rig.placer.keys.ctrl = true;
+  dragTo(rig, 2, rig.slot(0, 2).center());
+  EXPECT_EQ(rig.engine.dropTarget().kind, DropKind::Swap);
+  rig.placer.keys.shift = true;
+  dragTo(rig, 2, rig.slot(0, 2).center() + QPoint(5, 5));
+  EXPECT_EQ(rig.engine.dropTarget().kind, DropKind::Float);
+  rig.send(EventKind::MoveSizeEnd, 2);
+  rig.settle();
+  EXPECT_TRUE(rig.engine.model().isFloating(2));
+}
+
+TEST(TilingEngine, ASwapDragOntoAnotherMonitorJoinsItsLayoutAtTheEnd) {
+  Rig rig;
+  swapDrags(rig);
+  rig.engine.start();
+  rig.placer.add(5).monitor = kMonitorB;
+  rig.placer.windows[5].rect = QRect(2000, 100, 600, 400);
+  rig.send(EventKind::Show, 5);
+  rig.settle();
+  rig.open(1);
+  rig.open(2);
+  const QRect areaB = rig.placer.areas[kMonitorB];
+  const QRect spot = layoutSlots(QStringLiteral("mainStack"), areaB, 2, kGap, 0.5)[1];
+
+  rig.send(EventKind::MoveSizeStart, 2);
+  // The cursor is on B; most of the window can still be on A (the fake keeps its monitor).
+  dragTo(rig, 2, QPoint(areaB.x() + 200, areaB.center().y()));
+  EXPECT_EQ(rig.engine.dropTarget().kind, DropKind::Monitor);
+  EXPECT_EQ(rig.engine.dropTarget().monitor, kMonitorB);
+  EXPECT_EQ(rig.engine.dropTarget().rect, spot);
+  rig.send(EventKind::MoveSizeEnd, 2);
+  rig.settle();
+  ASSERT_TRUE(rig.engine.model().keyOf(2).has_value());
+  EXPECT_EQ(rig.engine.model().keyOf(2)->monitor, kMonitorB);
+  EXPECT_EQ(rig.placer.lastSlot(2), spot);
+  EXPECT_EQ(rig.placer.lastSlot(5),
+            layoutSlots(QStringLiteral("mainStack"), areaB, 2, kGap, 0.5)[0]);
+  EXPECT_EQ(rig.placer.lastSlot(1), rig.slot(0, 1));
+  // It stays there.
+  rig.engine.retileAll();
+  rig.settle();
+  EXPECT_EQ(rig.engine.model().keyOf(2)->monitor, kMonitorB);
+  EXPECT_EQ(rig.placer.windows[2].rect, spot);
+}
+
+TEST(TilingEngine, ADropOnAnotherMonitorTakesOnlyTheDraggedWindowOutOfItsStack) {
+  Rig rig;
+  swapDrags(rig);
+  rig.engine.start();
+  rig.open(1);
+  rig.open(2);
+  rig.open(3);
+  rig.placer.front = 3;
+  ASSERT_TRUE(rig.engine.stackDirection(Direction::Up).ok);  // [2, 3] on the right, 3 on top
+  rig.settle();
+  const QRect areaB = rig.placer.areas[kMonitorB];
+  rig.send(EventKind::MoveSizeStart, 3);
+  dragTo(rig, 3, areaB.center());
+  rig.send(EventKind::MoveSizeEnd, 3);
+  rig.settle();
+  EXPECT_EQ(rig.engine.model().keyOf(3)->monitor, kMonitorB);
+  EXPECT_EQ(rig.engine.model().keyOf(2)->monitor, kMonitorA);
+  EXPECT_EQ(rig.placer.lastSlot(3),
+            layoutSlots(QStringLiteral("mainStack"), areaB, 1, kGap, 0.5)[0]);
+  EXPECT_EQ(rig.placer.lastSlot(2), rig.slot(1, 2));
+}
+
+TEST(TilingEngine, AResizeOrASnapDuringASwapDragKeepsTheOldBehaviour) {
+  Rig rig;
+  swapDrags(rig);
+  rig.engine.start();
+  rig.open(1);
+  rig.open(2);
+  rig.placer.front = 2;
+  ASSERT_TRUE(rig.engine.setWorkspaceLayout(QStringLiteral("columns")));
+  rig.settle();
+  const std::vector<DropTarget>& drops = recordDrops(rig);
+  rig.send(EventKind::MoveSizeStart, 2);
+  EXPECT_TRUE(rig.engine.tracksLocation(2));
+  EXPECT_FALSE(rig.engine.tracksMouseResize(2));
+  dragTo(rig, 2, QPoint(300, 300));
+  EXPECT_EQ(rig.engine.dropTarget().kind, DropKind::Swap);
+  // Windows snaps it at the release: the size changes.
+  rig.placer.windows[2].rect = QRect(0, 0, 960, 1040);
+  rig.send(EventKind::MoveSizeEnd, 2);
+  rig.settle();
+  EXPECT_TRUE(rig.engine.model().isFloating(2));
+  ASSERT_FALSE(drops.empty());
+  EXPECT_EQ(drops.back().kind, DropKind::None);
+}
+
+TEST(TilingEngine, AClickOnATitleBarUnderSwapShowsNothingAndKeepsTheTile) {
+  Rig rig;
+  swapDrags(rig);
+  rig.engine.start();
+  rig.open(1);
+  rig.open(2);
+  const std::vector<DropTarget>& drops = recordDrops(rig);
+  rig.send(EventKind::MoveSizeStart, 2);
+  rig.placer.cursor = rig.slot(0, 2).center();
+  rig.send(EventKind::LocationChange, 2);
+  rig.send(EventKind::MoveSizeEnd, 2);
+  rig.settle();
+  EXPECT_TRUE(drops.empty());
+  EXPECT_TRUE(rig.engine.model().contains(2));
+  EXPECT_FALSE(rig.engine.model().isFloating(2));
+  EXPECT_EQ(rig.placer.lastSlot(2), rig.slot(1, 2));
+}
+
+TEST(TilingEngine, TheDropTargetClearsWhenTheDraggedWindowGoesAway) {
+  Rig rig;
+  swapDrags(rig);
+  rig.engine.start();
+  rig.open(1);
+  rig.open(2);
+  rig.send(EventKind::MoveSizeStart, 2);
+  dragTo(rig, 2, rig.slot(0, 2).center());
+  ASSERT_EQ(rig.engine.dropTarget().kind, DropKind::Swap);
+  rig.placer.windows.erase(2);
+  rig.send(EventKind::Destroy, 2);
+  EXPECT_EQ(rig.engine.dropTarget().kind, DropKind::None);
+  EXPECT_FALSE(rig.engine.tracksLocation(2));
+
+  rig.open(3);
+  rig.send(EventKind::MoveSizeStart, 3);
+  dragTo(rig, 3, rig.slot(0, 2).center());
+  ASSERT_EQ(rig.engine.dropTarget().kind, DropKind::Swap);
+  rig.engine.stop();
+  EXPECT_EQ(rig.engine.dropTarget().kind, DropKind::None);
+}
+
+TEST(TilingEngine, ADragUnderFloatTracksNoLocation) {
+  Rig rig;
+  rig.engine.start();
+  rig.open(1);
+  rig.open(2);
+  rig.placer.front = 2;
+  ASSERT_TRUE(rig.engine.setWorkspaceLayout(QStringLiteral("columns")));
+  rig.settle();
+  rig.send(EventKind::MoveSizeStart, 2);
+  EXPECT_FALSE(rig.engine.tracksLocation(2));
+  dragTo(rig, 2, rig.slot(0, 2).center());
+  EXPECT_EQ(rig.engine.dropTarget().kind, DropKind::None);
+}
+
 TEST(TilingEngine, ADesktopSwitchKeepsEachDesktopsStackAndNeverPlacesCloakedWindows) {
   Rig rig;
   rig.engine.start();

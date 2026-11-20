@@ -1,8 +1,9 @@
 // The real WindowPlacer. Documented APIs only: EnumWindows, GetWindowLong, GetWindowRect,
 // DwmGetWindowAttribute (DWMWA_EXTENDED_FRAME_BOUNDS, DWMWA_CLOAKED), MonitorFromWindow,
-// GetMonitorInfo, IVirtualDesktopManager::GetWindowDesktopId, OpenProcessToken and
-// SetWindowPos. The shown desktop comes from workspaces' vdesk::currentDesktopId() (its registry
-// value is on the allowlist in docs/architecture.md).
+// MonitorFromPoint, GetCursorPos, GetAsyncKeyState, GetMonitorInfo,
+// IVirtualDesktopManager::GetWindowDesktopId, OpenProcessToken and SetWindowPos. The shown desktop
+// comes from workspaces' vdesk::currentDesktopId() (its registry value is on the allowlist in
+// docs/architecture.md).
 //
 // place() never activates a window and never blocks on a hung one: SWP_ASYNCWINDOWPOS posts the
 // request, so the readback it returns can be stale; the engine verifies the bounds later.
@@ -190,6 +191,21 @@ class Win32WindowPlacer final : public WindowPlacer {
   }
   bool minimize(WindowId id) override {
     return ShowWindowAsync(reinterpret_cast<HWND>(id), SW_MINIMIZE) != FALSE;
+  }
+
+  // waku is per-monitor DPI aware, so GetCursorPos gives physical pixels, like the work areas.
+  std::optional<QPoint> cursorPosition() override {
+    POINT point = {};
+    if (!GetCursorPos(&point)) return std::nullopt;
+    return QPoint(point.x, point.y);
+  }
+  MonitorId monitorAt(const QPoint& point) override {
+    return reinterpret_cast<MonitorId>(
+        MonitorFromPoint(POINT{point.x(), point.y()}, MONITOR_DEFAULTTONULL));
+  }
+  HeldKeys heldKeys() override {
+    const auto down = [](int key) { return (GetAsyncKeyState(key) & 0x8000) != 0; };
+    return HeldKeys{down(VK_CONTROL), down(VK_MENU), down(VK_SHIFT)};
   }
 };
 

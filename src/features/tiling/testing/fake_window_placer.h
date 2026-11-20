@@ -129,6 +129,10 @@ class FakeWindowPlacer final : public WindowPlacer {
     QRect achieved = slot;
     if (clamp) achieved = clamp(hwnd, slot);
     found->second.rect = achieved;
+    // A real window belongs to the monitor that holds most of it.
+    for (const auto& [monitor, area] : areas) {
+      if (area.contains(achieved.center())) found->second.monitor = monitor;
+    }
     if (onPlace) onPlace(hwnd, slot);
     return {true, achieved};
   }
@@ -158,6 +162,15 @@ class FakeWindowPlacer final : public WindowPlacer {
     minimized.push_back(hwnd);
     return windows.count(hwnd) != 0;
   }
+  std::optional<QPoint> cursorPosition() override { return cursor; }
+  // The monitor whose work area holds the point (the fake has no taskbar strip outside it).
+  MonitorId monitorAt(const QPoint& point) override {
+    for (const auto& [monitor, area] : areas) {
+      if (area.contains(point)) return monitor;
+    }
+    return 0;
+  }
+  HeldKeys heldKeys() override { return keys; }
 
   // The slots given to `hwnd`, oldest first.
   std::vector<QRect> slotsOf(WindowId hwnd) const {
@@ -176,6 +189,8 @@ class FakeWindowPlacer final : public WindowPlacer {
   std::map<MonitorId, QRect> areas;
   QString desktop;
   std::optional<WindowId> front;
+  std::optional<QPoint> cursor;
+  HeldKeys keys;
   std::set<WindowId> refuse;
   std::set<WindowId> delayedRestores;
   std::function<QRect(WindowId, const QRect&)> clamp;

@@ -45,6 +45,30 @@ bool differs(const QRect& a, const QRect& b) {
          std::abs(a.height() - b.height()) > kMovedTolerance;
 }
 
+// The width or the height differs by more than the tolerance: a resize, not a move.
+bool resized(const QRect& a, const QRect& b) {
+  return std::abs(a.width() - b.width()) > kMovedTolerance ||
+         std::abs(a.height() - b.height()) > kMovedTolerance;
+}
+
+QString dropKindName(DropKind kind) {
+  switch (kind) {
+    case DropKind::None:
+      return QStringLiteral("none");
+    case DropKind::Swap:
+      return QStringLiteral("swap");
+    case DropKind::Stack:
+      return QStringLiteral("stack");
+    case DropKind::Monitor:
+      return QStringLiteral("monitor");
+    case DropKind::Float:
+      return QStringLiteral("float");
+    case DropKind::Back:
+      return QStringLiteral("back");
+  }
+  return QString();
+}
+
 // Where a window that is floated out of its tile goes: the size it had before the tiler first
 // placed it, centred on the tile it leaves, inside the work area. A launch size larger than the
 // work area is cut to it.
@@ -118,6 +142,9 @@ void TilingEngine::stop() {
   placed_.clear();
   floatRects_.clear();
   resizeDrags_.clear();
+  moveDrags_.clear();
+  dropped_.clear();
+  publishDrop({});
   clamped_.clear();
   settling_.clear();
   verifying_.clear();
@@ -229,21 +256,31 @@ void TilingEngine::onMoveSizeStart(WindowId hwnd) {
   // The bounds now are what the end is compared with: a clamped window counts as unmoved.
   placed_[hwnd] = facts->rect;
   const std::optional<WorkspaceKey> key = model_.keyOf(hwnd);
-  if (!key || paused_ ||
-      canonicalLayout(model_.layout(*key, settings_.layout)) != QLatin1String("mainStack")) {
-    return;
-  }
+  if (!key || paused_) return;
   const std::vector<WindowId> active = activeWindows(*key);
   const auto at = std::find(active.begin(), active.end(), hwnd);
   if (at == active.end()) return;
   const QRect area = placer_.workArea(key->monitor);
   if (area.isEmpty()) return;
+  const std::vector<QRect> slotRects = slotsFor(*key, area, active);
+  // Whether this is a move or a resize shows only once the window changes: both start here.
+  if (settings_.dragAction == DragAction::Swap && model_.view(*key).monocle == 0) {
+    MoveDrag moveDrag;
+    moveDrag.key = *key;
+    moveDrag.startRect = facts->rect;
+    moveDrag.active = active;
+    moveDrag.slotRects = slotRects;
+    moveDrags_[hwnd] = std::move(moveDrag);
+  }
+  if (canonicalLayout(model_.layout(*key, settings_.layout)) != QLatin1String("mainStack")) {
+    return;
+  }
   ResizeDrag drag;
   drag.key = *key;
   drag.startRect = facts->rect;
   drag.area = area;
   drag.active = active;
-  drag.slotRects = slotsFor(*key, area, active);
+  drag.slotRects = slotRects;
   drag.initialRatio = model_.view(*key).ratio;
   drag.initialWeights = model_.view(*key).weights;
   drag.gap = std::clamp(
@@ -257,6 +294,11 @@ void TilingEngine::onMoveSizeEnd(WindowId hwnd) {
   // The final bounds can be newer than the last location event, or the only sample.
   onLocationChange(hwnd);
   moving_.erase(hwnd);
+  std::optional<MoveDrag> moveDrag;
+  if (const auto found = moveDrags_.find(hwnd); found != moveDrags_.end()) {
+    moveDrag = std::move(found->second);
+    endMoveDrag(hwnd);
+  }
   const auto drag = resizeDrags_.find(hwnd);
   const bool hasResizeDrag = drag != resizeDrags_.end();
   const bool wasResize = hasResizeDrag && drag->second.resized;
@@ -277,6 +319,12 @@ void TilingEngine::onMoveSizeEnd(WindowId hwnd) {
   const bool sizeChanged =
       hasResizeDrag && (std::abs(startRect.width() - facts->rect.width()) > kMovedTolerance ||
                         std::abs(startRect.height() - facts->rect.height()) > kMovedTolerance);
+  // A Swap drag that moved the window lands where the cursor is. A change of size is a resize or
+  // a Snap (Windows sized it at the release): those keep the behaviour below.
+  if (moveDrag && key && differs(moveDrag->startRect, facts->rect) &&
+      !resized(moveDrag->startRect, facts->rect) && dropMoved(hwnd, *key, *moveDrag)) {
+    return;
+  }
   const bool cancelled = hasResizeDrag && wasResize && !differs(startRect, facts->rect);
   if (cancelled && key) {
     WorkspaceView& view = model_.edit(*key);
@@ -294,6 +342,7 @@ void TilingEngine::onMoveSizeEnd(WindowId hwnd) {
 }
 
 void TilingEngine::onLocationChange(WindowId hwnd) {
+  updateMoveDrag(hwnd);
   auto found = resizeDrags_.find(hwnd);
   if (!running_ || found == resizeDrags_.end() || !model_.contains(hwnd)) return;
   const std::optional<WindowFacts> facts = placer_.state(hwnd);
@@ -393,6 +442,119 @@ void TilingEngine::onLocationChange(WindowId hwnd) {
   if (changed) requestRetile(drag.key);
 }
 
+// --- drag to swap
+
+void TilingEngine::updateMoveDrag(WindowId hwnd) {
+  const auto found = moveDrags_.find(hwnd);
+  if (found == moveDrags_.end()) return;
+  if (!running_ || paused_ || !model_.contains(hwnd)) {
+    endMoveDrag(hwnd);
+    return;
+  }
+  const std::optional<WindowFacts> facts = placer_.state(hwnd);
+  if (!facts) return;
+  MoveDrag& drag = found->second;
+  if (resized(drag.startRect, facts->rect)) {
+    endMoveDrag(hwnd);  // a resize: the resize drag (or a float at the end) takes it
+    return;
+  }
+  if (!drag.moved) {
+    if (!differs(drag.startRect, facts->rect)) return;  // a click on the title bar shows nothing
+    drag.moved = true;
+  }
+  publishDrop(dropTargetFor(hwnd, drag));
+}
+
+DropTarget TilingEngine::dropTargetFor(WindowId hwnd, MoveDrag& drag) {
+  DropTarget target;
+  target.monitor = drag.key.monitor;
+  if (placer_.heldKeys().holds(settings_.dragFloatKey)) {
+    target.kind = DropKind::Float;
+    return target;
+  }
+  // By default it goes back to its own tile.
+  target.kind = DropKind::Back;
+  const auto self = std::find(drag.active.begin(), drag.active.end(), hwnd);
+  const size_t own = static_cast<size_t>(self - drag.active.begin());
+  if (own < drag.slotRects.size()) target.rect = drag.slotRects[own];
+  const std::optional<QPoint> cursor = placer_.cursorPosition();
+  if (!cursor) return target;
+  const MonitorId monitor = placer_.monitorAt(*cursor);
+  if (monitor != 0 && monitor != drag.key.monitor) {
+    auto spot = drag.spots.find(monitor);
+    if (spot == drag.spots.end()) {
+      spot = drag.spots.emplace(monitor, spotAtEnd(WorkspaceKey{monitor, drag.key.desktop})).first;
+    }
+    if (!spot->second.isEmpty()) {
+      target.kind = DropKind::Monitor;
+      target.monitor = monitor;
+      target.rect = spot->second;
+    }
+    return target;
+  }
+  for (size_t i = 0; i < drag.active.size() && i < drag.slotRects.size(); ++i) {
+    if (!drag.slotRects[i].contains(*cursor)) continue;
+    const WindowId other = drag.active[i];
+    if (other == hwnd) return target;
+    target.kind = model_.stackOf(other).size() > 1 ? DropKind::Stack : DropKind::Swap;
+    target.window = other;
+    target.rect = drag.slotRects[i];
+    return target;
+  }
+  return target;  // over a gap between tiles
+}
+
+QRect TilingEngine::spotAtEnd(const WorkspaceKey& key) {
+  const QRect area = placer_.workArea(key.monitor);
+  if (area.isEmpty()) return QRect();
+  std::vector<WindowId> active = activeWindows(key);
+  active.push_back(0);  // the dropped window, appended like a new one
+  const std::vector<QRect> rects = slotsFor(key, area, active);
+  return rects.empty() ? QRect() : rects.back();
+}
+
+bool TilingEngine::dropMoved(WindowId hwnd, const WorkspaceKey& key, MoveDrag& drag) {
+  const DropTarget target = dropTargetFor(hwnd, drag);
+  if (target.kind == DropKind::Float) return false;  // floats like a drag under DragAction::Float
+  bool applied = false;
+  switch (target.kind) {
+    case DropKind::Swap:
+      applied = model_.swap(hwnd, target.window);
+      break;
+    case DropKind::Stack:
+      applied = model_.stackOnto(hwnd, target.window);
+      break;
+    case DropKind::Monitor: {
+      const WorkspaceKey to{target.monitor, key.desktop};
+      model_.add(to, hwnd);
+      placed_.erase(hwnd);
+      dropped_.insert(hwnd);
+      requestRetile(to);
+      applied = true;
+      break;
+    }
+    case DropKind::None:
+    case DropKind::Float:
+    case DropKind::Back:
+      break;
+  }
+  qDebug().noquote() << "tiling: drop" << describe(hwnd, nullptr)
+                     << (applied ? dropKindName(target.kind) : QStringLiteral("back"));
+  requestRetile(key);  // the tiles take their new places, or the window goes back to its own
+  return true;
+}
+
+void TilingEngine::endMoveDrag(WindowId hwnd) {
+  if (moveDrags_.erase(hwnd) == 0) return;
+  publishDrop({});
+}
+
+void TilingEngine::publishDrop(const DropTarget& target) {
+  if (target == drop_) return;
+  drop_ = target;
+  if (dropListener_) dropListener_(drop_);
+}
+
 // --- evaluation
 
 void TilingEngine::scheduleEvaluate(WindowId hwnd, int ms, int attempt, bool force,
@@ -474,6 +636,8 @@ void TilingEngine::forget(WindowId hwnd, bool dropFloat) {
   verifying_.erase(hwnd);
   moving_.erase(hwnd);
   resizeDrags_.erase(hwnd);
+  endMoveDrag(hwnd);
+  dropped_.erase(hwnd);
   wasTop_.erase(hwnd);
   const std::optional<WorkspaceKey> key = model_.remove(hwnd);
   if (dropFloat) model_.setFloating(hwnd, false);
@@ -545,7 +709,9 @@ void TilingEngine::retile(const WorkspaceKey& key) {
         forget(hwnd, false);
         continue;
       }
-      if (facts->monitor != 0 && facts->monitor != key.monitor) {
+      // A window dropped on this monitor is put here, wherever most of it is until then.
+      const bool dropped = dropped_.erase(hwnd) != 0;
+      if (!dropped && facts->monitor != 0 && facts->monitor != key.monitor) {
         // Moved to another monitor by something other than a drag (a hotkey, a script).
         const WorkspaceKey moved{facts->monitor, key.desktop};
         model_.add(moved, hwnd);

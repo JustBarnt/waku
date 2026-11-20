@@ -6,7 +6,9 @@
 #include <QQmlEngine>
 #include <QScreen>
 #include <algorithm>
+#include <cmath>
 #include <exception>
+#include <utility>
 
 #include "features/tiling/layouts.h"
 #include "features/tiling/tiling_rules.h"
@@ -27,6 +29,34 @@ Tiling::Deps liveDeps() {
 
 QString yesNo(bool value) { return value ? QStringLiteral("yes") : QStringLiteral("no"); }
 
+QString dropKindText(DropKind kind) {
+  switch (kind) {
+    case DropKind::Swap:
+      return QStringLiteral("swap");
+    case DropKind::Stack:
+      return QStringLiteral("stack");
+    case DropKind::Monitor:
+      return QStringLiteral("monitor");
+    case DropKind::Back:
+      return QStringLiteral("back");
+    case DropKind::Float:
+      return QStringLiteral("float");
+    case DropKind::None:
+      break;
+  }
+  return QString();
+}
+
+QVariantMap inactiveDropTarget() {
+  return {{QStringLiteral("active"), false},
+          {QStringLiteral("kind"), QString()},
+          {QStringLiteral("screen"), QString()},
+          {QStringLiteral("x"), 0},
+          {QStringLiteral("y"), 0},
+          {QStringLiteral("width"), 0},
+          {QStringLiteral("height"), 0}};
+}
+
 }  // namespace
 
 Tiling::Tiling(QObject* parent) : Tiling(liveDeps(), parent) {}
@@ -45,6 +75,10 @@ void Tiling::init(Deps deps) {
   settings_.selfElevated = deps.selfElevated;
   watchScreens_ = deps.watchScreens;
   if (placer_ && scheduler_) engine_ = std::make_unique<TilingEngine>(*placer_, *scheduler_);
+  dropTarget_ = inactiveDropTarget();
+  if (engine_) {
+    engine_->setDropListener([this](const DropTarget& target) { updateDropTarget(target); });
+  }
 
   screenTimer_.setSingleShot(true);
   screenTimer_.setInterval(deps.screenDebounceMs);
@@ -111,7 +145,7 @@ void Tiling::onEvent(const WindowEvent& event) {
     }
     if (engine_) engine_->handle(event);
     if (hooks_ && event.kind == EventKind::MoveSizeStart) {
-      hooks_->trackLocation(event.hwnd, engine_ && engine_->tracksMouseResize(event.hwnd));
+      hooks_->trackLocation(event.hwnd, engine_ && engine_->tracksLocation(event.hwnd));
     }
     if (event.kind == EventKind::Foreground) refreshCurrentLayout();
   } catch (const std::exception& e) {
@@ -181,6 +215,86 @@ void Tiling::setRules(const QVariantList& rules) {
 }
 
 QStringList Tiling::layouts() const { return layoutNames(); }
+
+QString Tiling::dragAction() const {
+  return settings_.dragAction == DragAction::Swap ? QStringLiteral("swap")
+                                                  : QStringLiteral("float");
+}
+
+void Tiling::setDragAction(const QString& action) {
+  const QString name = action.trimmed().toLower();
+  DragAction value = DragAction::Float;
+  if (name == QLatin1String("swap")) {
+    value = DragAction::Swap;
+  } else if (name != QLatin1String("float")) {
+    qWarning().noquote() << "tiling: unknown dragAction" << action << "(float, swap)";
+    return;
+  }
+  if (value == settings_.dragAction) return;
+  settings_.dragAction = value;
+  pushSettings();
+  emit dragActionChanged();
+}
+
+QString Tiling::dragFloatModifier() const {
+  switch (settings_.dragFloatKey) {
+    case ModifierKey::Alt:
+      return QStringLiteral("alt");
+    case ModifierKey::Shift:
+      return QStringLiteral("shift");
+    case ModifierKey::Ctrl:
+      break;
+  }
+  return QStringLiteral("ctrl");
+}
+
+void Tiling::setDragFloatModifier(const QString& key) {
+  const QString name = key.trimmed().toLower();
+  ModifierKey value = ModifierKey::Ctrl;
+  if (name == QLatin1String("alt")) {
+    value = ModifierKey::Alt;
+  } else if (name == QLatin1String("shift")) {
+    value = ModifierKey::Shift;
+  } else if (name != QLatin1String("ctrl")) {
+    qWarning().noquote() << "tiling: unknown dragFloatModifier" << key << "(ctrl, alt, shift)";
+    return;
+  }
+  if (value == settings_.dragFloatKey) return;
+  settings_.dragFloatKey = value;
+  pushSettings();
+  emit dragFloatModifierChanged();
+}
+
+void Tiling::updateDropTarget(const DropTarget& target) {
+  QVariantMap next = inactiveDropTarget();
+  const bool drawn = target.kind == DropKind::Swap || target.kind == DropKind::Stack ||
+                     target.kind == DropKind::Monitor || target.kind == DropKind::Back;
+  next[QStringLiteral("kind")] = dropKindText(target.kind);
+  if (drawn && !target.rect.isEmpty() && qGuiApp) {
+    // QScreen::geometry() on Windows keeps the physical origin with the logical size (as in
+    // host::physicalScreenRect): the screen whose physical rectangle holds the centre is the one.
+    const QPoint centre = target.rect.center();
+    for (QScreen* screen : QGuiApplication::screens()) {
+      const QRect geometry = screen->geometry();
+      const double dpr = screen->devicePixelRatio() > 0 ? screen->devicePixelRatio() : 1.0;
+      const QRect physical(geometry.topLeft(),
+                           QSize(static_cast<int>(std::lround(geometry.width() * dpr)),
+                                 static_cast<int>(std::lround(geometry.height() * dpr))));
+      if (!physical.contains(centre)) continue;
+      const auto logical = [dpr](int value) { return static_cast<int>(std::lround(value / dpr)); };
+      next[QStringLiteral("active")] = true;
+      next[QStringLiteral("screen")] = screen->name();
+      next[QStringLiteral("x")] = logical(target.rect.x() - geometry.x());
+      next[QStringLiteral("y")] = logical(target.rect.y() - geometry.y());
+      next[QStringLiteral("width")] = logical(target.rect.width());
+      next[QStringLiteral("height")] = logical(target.rect.height());
+      break;
+    }
+  }
+  if (next == dropTarget_) return;
+  dropTarget_ = std::move(next);
+  emit dropTargetChanged();
+}
 
 // --- commands
 

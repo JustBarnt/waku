@@ -86,7 +86,8 @@ class TilingHooks {
   virtual ~TilingHooks() = default;
   // False when no hook could be installed.
   virtual bool install(Sink sink) = 0;
-  // Tracks geometry only for a managed interactive resize. Implementations may ignore this.
+  // Tracks geometry only while the engine wants it for one window (TilingEngine::tracksLocation: a
+  // managed interactive resize, a swap drag). Implementations may ignore this.
   virtual void trackLocation(WindowId hwnd, bool enabled) {
     (void)hwnd;
     (void)enabled;

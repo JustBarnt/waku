@@ -7,6 +7,7 @@
 #include <QStringList>
 #include <QTimer>
 #include <QVariantList>
+#include <QVariantMap>
 #include <functional>
 #include <memory>
 
@@ -38,6 +39,15 @@ namespace waku::tiling {
 //             `process` and `class` match whole and without case, `title` is a regular expression.
 //             No rule ships by default beyond the built-in splash and shell classes
 //   active    true while the tiler runs: enabled and on the live desktop
+//   dragAction  what a title-bar drag of a tiled window does: "float" (default) takes it out of
+//             the layout; "swap" drops it where the cursor is released (onto another tile: they
+//             trade places; onto a stack: it joins it; onto another monitor: it joins that layout
+//             at the end; elsewhere: back to its tile)
+//   dragFloatModifier  the key that, held at the release of a "swap" drag, floats the window:
+//             "ctrl" (default), "alt" or "shift"
+//   dropTarget  during a "swap" drag, where the window would land: { active, kind ("swap",
+//             "stack", "monitor", "back"), screen (a ShellScreen name), x, y, width, height } in
+//             logical pixels from the top-left of that screen. TilingDropIndicator draws it
 //
 // A shell turns it off with
 //   Component.onCompleted: { Tiling.enabled = false }
@@ -55,6 +65,10 @@ class Tiling : public QObject, public TilingControl {
   Q_PROPERTY(bool active READ active NOTIFY activeChanged FINAL)
   Q_PROPERTY(QStringList layouts READ layouts CONSTANT FINAL)
   Q_PROPERTY(QString currentLayout READ currentLayout NOTIFY currentLayoutChanged FINAL)
+  Q_PROPERTY(QString dragAction READ dragAction WRITE setDragAction NOTIFY dragActionChanged FINAL)
+  Q_PROPERTY(QString dragFloatModifier READ dragFloatModifier WRITE setDragFloatModifier NOTIFY
+                 dragFloatModifierChanged FINAL)
+  Q_PROPERTY(QVariantMap dropTarget READ dropTarget NOTIFY dropTargetChanged FINAL)
 
  public:
   // Everything the service needs from the machine. A null placer or hooks (the offscreen
@@ -90,6 +104,11 @@ class Tiling : public QObject, public TilingControl {
   // The layout of the workspace in front (the focused window's desktop and monitor); empty while
   // the tiler is not active. Follows the focus and every layout change.
   QString currentLayout() const { return currentLayout_; }
+  QString dragAction() const;
+  void setDragAction(const QString& action);
+  QString dragFloatModifier() const;
+  void setDragFloatModifier(const QString& key);
+  QVariantMap dropTarget() const { return dropTarget_; }
 
   // Floats a tiled focused window, or tiles a floating one.
   Q_INVOKABLE void toggleFloat();
@@ -141,12 +160,17 @@ class Tiling : public QObject, public TilingControl {
   void rulesChanged();
   void activeChanged();
   void currentLayoutChanged();
+  void dragActionChanged();
+  void dragFloatModifierChanged();
+  void dropTargetChanged();
 
  private:
   void init(Deps deps);
   void onEvent(const WindowEvent& event);
   void pushSettings();
   void refreshCurrentLayout();
+  // Publishes the engine's drop target in the logical coordinates of the screen that holds it.
+  void updateDropTarget(const DropTarget& target);
   void watchScreen(QScreen* screen);
   QString notActive() const;
   // Runs an engine command when the tiler is active; the answer line.
@@ -160,6 +184,7 @@ class Tiling : public QObject, public TilingControl {
   QTimer screenTimer_;
   TilingSettings settings_;
   QVariantList rules_;
+  QVariantMap dropTarget_;
   bool enabled_ = false;
   bool active_ = false;
   bool watchScreens_ = true;

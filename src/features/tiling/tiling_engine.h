@@ -1,11 +1,13 @@
 #pragma once
 
+#include <QRect>
 #include <QString>
 #include <functional>
 #include <map>
 #include <memory>
 #include <optional>
 #include <set>
+#include <utility>
 #include <vector>
 
 #include "features/tiling/layouts.h"
@@ -26,12 +28,32 @@ class Scheduler {
 
 std::unique_ptr<Scheduler> makeQtScheduler();
 
+// What a title-bar drag of a tiled window does. Float takes it out of the layout; Swap drops it
+// where the cursor is released: onto another tile (the two trade places), onto a stack (it joins
+// it), onto another monitor (it joins that layout at the end) or back into its own tile.
+enum class DragAction { Float, Swap };
+
 struct TilingSettings {
   QString layout = QStringLiteral("mainStack");  // the layout of a workspace with none of its own
   int gap = 8;                                   // pixels between windows and around them
   double ratio = 0.5;                            // the share of the width the main window takes
   std::vector<Rule> rules;
   bool selfElevated = false;  // waku runs elevated: elevated windows are movable
+  DragAction dragAction = DragAction::Float;
+  ModifierKey dragFloatKey = ModifierKey::Ctrl;  // held at the release of a Swap drag: it floats
+};
+
+// Where the window of a Swap drag would land if it were released now. `rect` is in physical
+// pixels on `monitor`: the tile it takes (Swap, Stack, Back) or the spot it gets at the end of the
+// other monitor's layout (Monitor); empty for Float and None.
+enum class DropKind { None, Swap, Stack, Monitor, Float, Back };
+
+struct DropTarget {
+  DropKind kind = DropKind::None;
+  MonitorId monitor = 0;
+  QRect rect;
+  WindowId window = 0;  // the window whose tile it is (Swap, Stack)
+  friend bool operator==(const DropTarget&, const DropTarget&) = default;
 };
 
 struct TilingStatus {
@@ -109,6 +131,17 @@ class TilingEngine {
   void handle(const WindowEvent& event);
   // True only while a managed mainStack window is being interactively resized.
   bool tracksMouseResize(WindowId hwnd) const { return resizeDrags_.count(hwnd) != 0; }
+  // True while the engine wants the location events of the window: a mainStack resize or a drag
+  // under DragAction::Swap.
+  bool tracksLocation(WindowId hwnd) const {
+    return resizeDrags_.count(hwnd) != 0 || moveDrags_.count(hwnd) != 0;
+  }
+  // Where the window of a Swap drag would land now; kind None outside one.
+  const DropTarget& dropTarget() const { return drop_; }
+  // Called each time dropTarget() changes.
+  void setDropListener(std::function<void(const DropTarget&)> listener) {
+    dropListener_ = std::move(listener);
+  }
 
   // Retiles every workspace of the shown desktop (a screen or work area change).
   void retileAll();
@@ -182,6 +215,19 @@ class TilingEngine {
   void onMoveSizeStart(WindowId hwnd);
   void onMoveSizeEnd(WindowId hwnd);
   void onLocationChange(WindowId hwnd);
+  struct MoveDrag;
+  // A Swap drag: follows the window and publishes where it would land.
+  void updateMoveDrag(WindowId hwnd);
+  // Where the window of `drag` lands if it is released now (reads the cursor and the keys).
+  DropTarget dropTargetFor(WindowId hwnd, MoveDrag& drag);
+  // The rectangle a window dropped on the workspace `key` gets: the last slot of its layout with
+  // one window more. Empty when the monitor is unknown.
+  QRect spotAtEnd(const WorkspaceKey& key);
+  // Applies the drop of a Swap drag that moved the window (same size); false when it floats.
+  bool dropMoved(WindowId hwnd, const WorkspaceKey& key, MoveDrag& drag);
+  // Ends the Swap drag of the window, if any, and clears the drop target.
+  void endMoveDrag(WindowId hwnd);
+  void publishDrop(const DropTarget& target);
   // A newly managed window that moved by itself after its placement goes back to its slot.
   void onSettlingMove(WindowId hwnd);
   void raiseNewTops(const WorkspaceKey& key, const std::vector<WindowId>& active);
@@ -239,6 +285,24 @@ class TilingEngine {
     bool resized = false;
   };
   std::map<WindowId, ResizeDrag> resizeDrags_;
+  // A title-bar drag under DragAction::Swap: the workspace's tiles when it started. It ends at
+  // MoveSizeEnd, or early when the window changes size (a resize, not a move).
+  struct MoveDrag {
+    WorkspaceKey key;
+    QRect startRect;
+    std::vector<WindowId> active;
+    std::vector<QRect> slotRects;
+    // Left its tile: the drop target is shown from then on.
+    bool moved = false;
+    // spotAtEnd per other monitor, worked out once per drag.
+    std::map<MonitorId, QRect> spots;
+  };
+  std::map<WindowId, MoveDrag> moveDrags_;
+  // Dropped on another monitor: its next placement puts it there, whichever monitor holds most of
+  // it until then (retile would otherwise send it back).
+  std::set<WindowId> dropped_;
+  DropTarget drop_;
+  std::function<void(const DropTarget&)> dropListener_;
   std::set<WindowId> clamped_;  // placed, but not at the size of its slot
   // Newly managed windows: the placements left to undo a change of their own bounds, the serial of
   // the settling period (a later period of the same window outlives this one's timer) and of the
