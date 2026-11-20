@@ -1708,6 +1708,66 @@ TEST(TilingEngine, ALayoutNameAppliesToTheForegroundWorkspaceOnly) {
   EXPECT_EQ(rig.placer.lastSlot(3), columns[2]);
 }
 
+TEST(TilingEngine, EachVirtualDesktopKeepsItsOwnLayoutEvenWhenEmpty) {
+  Rig rig;
+  int switches = 0;
+  rig.engine.setDesktopListener([&switches] { ++switches; });
+  rig.engine.start();
+  rig.open(1);
+  rig.open(2);
+  rig.placer.front = 1;
+  ASSERT_TRUE(rig.engine.setWorkspaceLayout(QStringLiteral("columns")));
+  EXPECT_EQ(rig.engine.currentLayout(), QStringLiteral("columns"));
+
+  // Switch to an empty desktop D2: Windows cloaks the windows of D1, the focus stays on window 1.
+  rig.placer.desktop = QStringLiteral("{D2}");
+  for (WindowId id : {1, 2}) {
+    rig.placer.windows[id].cloaked = true;
+    rig.send(EventKind::Cloaked, id);
+  }
+  rig.settle();
+  EXPECT_EQ(switches, 1);
+  EXPECT_EQ(rig.engine.currentLayout(), QStringLiteral("mainStack"));  // D2's, not D1's
+
+  // A layout set on the empty desktop is that desktop's; the default stays.
+  ASSERT_TRUE(rig.engine.setWorkspaceLayout(QStringLiteral("rows")));
+  EXPECT_EQ(rig.engine.currentLayout(), QStringLiteral("rows"));
+  EXPECT_EQ(rig.engine.settings().layout, QStringLiteral("mainStack"));
+  rig.open(3);  // opens on D2
+  rig.open(4);
+  EXPECT_EQ(rig.placer.lastSlot(3), layoutSlots(QStringLiteral("rows"), kAreaA, 2, kGap, 0.5)[0]);
+
+  // Back to D1: its layout again.
+  rig.placer.desktop = QStringLiteral("{D1}");
+  for (WindowId id : {1, 2}) {
+    rig.placer.windows[id].cloaked = false;
+    rig.send(EventKind::Uncloaked, id);
+  }
+  for (WindowId id : {3, 4}) {
+    rig.placer.windows[id].cloaked = true;
+    rig.send(EventKind::Cloaked, id);
+  }
+  rig.settle();
+  rig.placer.front = 1;
+  EXPECT_EQ(switches, 2);
+  EXPECT_EQ(rig.engine.currentLayout(), QStringLiteral("columns"));
+}
+
+TEST(TilingEngine, WithoutAWindowInFrontTheLayoutIsTheWorkspaceUnderTheCursor) {
+  Rig rig;
+  rig.engine.start();
+  rig.placer.cursor = rig.placer.areas[kMonitorB].center();
+  ASSERT_TRUE(rig.engine.setWorkspaceLayout(QStringLiteral("grid")));
+  EXPECT_EQ(rig.engine.currentLayout(), QStringLiteral("grid"));
+  EXPECT_EQ(rig.engine.settings().layout, QStringLiteral("mainStack"));
+  rig.placer.cursor = kAreaA.center();
+  EXPECT_EQ(rig.engine.currentLayout(), QStringLiteral("mainStack"));
+  // With no monitor known at all, the default is what changes, as before.
+  rig.placer.cursor.reset();
+  ASSERT_TRUE(rig.engine.setWorkspaceLayout(QStringLiteral("rows")));
+  EXPECT_EQ(rig.engine.settings().layout, QStringLiteral("rows"));
+}
+
 TEST(TilingEngine, CycleLayoutWalksTheListOfTheForegroundWorkspaceAndWraps) {
   Rig rig;
   rig.engine.start();

@@ -114,6 +114,8 @@ void Tiling::init(Deps deps) {
     engine_->setDropListener([this](const DropTarget& target) { updateDropTarget(target); });
     engine_->setPreviewListener(
         [this](const ResizePreview& preview) { updateResizePreview(preview); });
+    // Another desktop shows another workspace, with a layout of its own.
+    engine_->setDesktopListener([this] { refreshCurrentLayout(); });
   }
 
   screenTimer_.setSingleShot(true);

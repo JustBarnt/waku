@@ -238,7 +238,9 @@ Most actions operate on the foreground window and its workspace:
 - `toggle`: switch the focused window between floating and tiled.
 - `float`: make the focused window float.
 - `layout <name>`: set the workspace layout. Names are `mainStack`, `mainStackTop`, `columns`,
-  `rows`, `bsp`, `grid` and `centerMain`. Use `next` or `previous` to cycle through them.
+  `rows`, `bsp`, `grid` and `centerMain`. Use `next` or `previous` to cycle through them. Each
+  virtual desktop and monitor has its own layout; on an empty desktop the command sets that
+  desktop's, which its windows take when they open.
 - `retile`: arrange windows again.
 - `status`: report tiler state and workspace details.
 

@@ -166,11 +166,16 @@ class TilingEngine {
 
   // Floats or tiles the foreground window: `floating` unset toggles.
   FloatOutcome setForegroundFloating(std::optional<bool> floating);
-  // The layout of the workspace of the foreground window (the default layout when no managed
-  // window is in front). False for an unknown name.
+  // The layout of the workspace in front (shownKey: on an empty desktop, that desktop's workspace
+  // on the monitor in front, which its windows take when they open). The default layout only when
+  // no monitor is known. False for an unknown name.
   bool setWorkspaceLayout(const QString& name);
-  // The layout in force for the foreground window's workspace (the default layout without one).
+  // The layout in force for the workspace in front (the default layout without one of its own).
   QString currentLayout() const;
+  // Called when the engine sees that another virtual desktop is shown (currentLayout() may differ).
+  void setDesktopListener(std::function<void()> listener) {
+    desktopListener_ = std::move(listener);
+  }
   // Moves the layout of that workspace `step` places along layoutNames(), wrapping. The message
   // is the new layout's name.
   CommandResult cycleLayout(int step);
@@ -261,7 +266,10 @@ class TilingEngine {
   // it is placed again, and returns true. `why` is for the debug line.
   bool settleLater(WindowId hwnd, const WindowFacts& facts, const QString& why);
   WorkspaceKey keyFor(const WindowFacts& facts) const;
-  std::optional<WorkspaceKey> foregroundKey() const;
+  // The workspace in front: the focused window's when it is tiled on the shown desktop, otherwise
+  // the shown desktop's workspace on the focused window's monitor, else the one under the cursor.
+  // Nothing when no monitor or desktop is known.
+  std::optional<WorkspaceKey> shownKey() const;
   struct Focused {
     WorkspaceKey key;
     WindowId hwnd = 0;
@@ -331,6 +339,7 @@ class TilingEngine {
   std::function<void(const DropTarget&)> dropListener_;
   ResizePreview preview_;
   std::function<void(const ResizePreview&)> previewListener_;
+  std::function<void()> desktopListener_;
   std::set<WindowId> clamped_;  // placed, but not at the size of its slot
   // Newly managed windows: the placements left to undo a change of their own bounds, the serial of
   // the settling period (a later period of the same window outlives this one's timer) and of the

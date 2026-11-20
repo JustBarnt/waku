@@ -219,6 +219,28 @@ TEST(TilingService, ASwapDragPublishesItsDropTargetAndTracksLocation) {
   EXPECT_EQ(rig.tiling->dropTarget().value(QStringLiteral("kind")).toString(), QString());
 }
 
+TEST(TilingService, TheCurrentLayoutFollowsADesktopSwitch) {
+  Rig rig;
+  rig.placer->add(1);
+  rig.placer->add(2);
+  rig.tiling->setEnabled(true);
+  rig.scheduler->runAll();
+  rig.placer->front = 1;
+  ASSERT_TRUE(rig.tiling->setLayout(QStringLiteral("columns")));
+  EXPECT_EQ(rig.tiling->currentLayout(), QStringLiteral("columns"));
+  QSignalSpy changed(rig.tiling.get(), &Tiling::currentLayoutChanged);
+
+  // An empty desktop: no window takes the focus, so no Foreground event comes.
+  rig.placer->desktop = QStringLiteral("{D2}");
+  for (WindowId id : {1, 2}) {
+    rig.placer->windows[id].cloaked = true;
+    rig.hooks->fire(EventKind::Cloaked, id);
+  }
+  rig.scheduler->runAll();
+  EXPECT_EQ(rig.tiling->currentLayout(), QStringLiteral("mainStack"));
+  EXPECT_EQ(changed.count(), 1);
+}
+
 TEST(TilingService, RulesFromTheShellReachTheEngine) {
   Rig rig;
   rig.placer->add(1, QStringLiteral("skip.exe"));

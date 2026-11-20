@@ -784,6 +784,7 @@ void TilingEngine::refreshDesktop() {
   for (const WorkspaceKey& key : model_.keys()) {
     if (key.desktop == desktop) requestRetile(key);
   }
+  if (desktopListener_) desktopListener_();
 }
 
 // --- placement
@@ -1090,18 +1091,30 @@ FloatOutcome TilingEngine::setForegroundFloating(std::optional<bool> floating) {
   return model_.contains(hwnd) ? FloatOutcome::Tiled : FloatOutcome::Ineligible;
 }
 
-std::optional<WorkspaceKey> TilingEngine::foregroundKey() const {
+std::optional<WorkspaceKey> TilingEngine::shownKey() const {
+  QString desktop = placer_.currentDesktop();
+  if (desktop.isEmpty()) desktop = currentDesktop_;
+  MonitorId monitor = 0;
   if (const std::optional<WindowId> front = placer_.foreground()) {
-    if (const auto key = model_.keyOf(*front)) return key;
+    // After a switch to an empty desktop the focus can stay on a window of the one left.
+    const std::optional<WorkspaceKey> key = model_.keyOf(*front);
+    if (key && (desktop.isEmpty() || key->desktop == desktop)) return key;
+    if (const std::optional<WindowFacts> facts = placer_.state(*front)) monitor = facts->monitor;
   }
-  return std::nullopt;
+  if (monitor == 0) {
+    if (const std::optional<QPoint> cursor = placer_.cursorPosition()) {
+      monitor = placer_.monitorAt(*cursor);
+    }
+  }
+  if (monitor == 0 || desktop.isEmpty()) return std::nullopt;
+  return WorkspaceKey{monitor, desktop};
 }
 
 bool TilingEngine::setWorkspaceLayout(const QString& name) {
   const QString layout = canonicalLayout(name);
   if (layout.isEmpty()) return false;
   // Sizes given by hand belong to the layout they were given in: another starts from its defaults.
-  if (const std::optional<WorkspaceKey> key = foregroundKey()) {
+  if (const std::optional<WorkspaceKey> key = shownKey()) {
     if (canonicalLayout(model_.layout(*key, settings_.layout)) != layout) model_.resetSizes(*key);
     model_.setLayout(*key, layout);
     requestRetile(*key);
@@ -1118,7 +1131,7 @@ bool TilingEngine::setWorkspaceLayout(const QString& name) {
 
 QString TilingEngine::currentLayout() const {
   QString name = settings_.layout;
-  if (const std::optional<WorkspaceKey> key = foregroundKey()) name = model_.layout(*key, name);
+  if (const std::optional<WorkspaceKey> key = shownKey()) name = model_.layout(*key, name);
   const QString canonical = canonicalLayout(name);
   return canonical.isEmpty() ? layoutNames().front() : canonical;
 }

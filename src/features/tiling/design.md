@@ -329,8 +329,14 @@ size end). With `Tiling.dragAction: "swap"` a snap still floats the window (see 
 
 The names are case-insensitive and ignore `-`, `_` and spaces (`main-stack-top` is
 `mainStackTop`). `Tiling.layout` is the default; `wakuc tile layout <name>` sets one workspace;
-`wakuc tile layout next|previous` walks the list below for the focused window's workspace, wrapping
-(`tile status` shows the layout in force). `ratio` (0.5 by default) is the share of the first
+`wakuc tile layout next|previous` walks the list below for it, wrapping (`tile status` and
+`Tiling.currentLayout` show the layout in force). The workspace is the one in front
+(`shownKey`): the focused window's when it is tiled on the shown desktop, otherwise the shown
+desktop's workspace on the focused window's monitor or the one under the cursor. So an empty
+desktop has a layout of its own, which its windows take when they open; only with no monitor known
+does the command change the default. The engine tells the service when it sees another desktop
+shown (`setDesktopListener`), so `currentLayout` follows a switch to an empty desktop, which brings
+no Foreground event. `ratio` (0.5 by default) is the share of the first
 split: of the width for `mainStack`, `bsp` and `centerMain`, of the height for `mainStackTop`. One
 window fills the area in every layout. `tile flip` mirrors the slots of any of them.
 
