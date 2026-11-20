@@ -135,10 +135,90 @@ place each window once.
 Screen changes (`screenAdded`, `screenRemoved`, `availableGeometryChanged`, `geometryChanged`)
 retile after 400 ms.
 
+## Drag to swap (planned)
+
+Not built yet; this is the plan to review before any code. Komorebi and GlazeWM let the mouse
+rearrange tiles: drag a tiled window by its title bar onto another and the two trade places. Here a
+title-bar drag floats the window (see Events, "User intent"). The plan keeps that the default.
+
+### Behaviour
+
+Opt-in with `Tiling.dragAction`: `"float"` (default, today's behaviour) or `"swap"`. With `"swap"`,
+a title-bar drag of a managed window ends by where the cursor is when the button is released:
+
+| Released over | Result |
+|---|---|
+| another tile that holds one window | the two tiles trade places (`TilingModel::swap`) |
+| a tile that holds a stack | the window joins that stack and becomes its top (`TilingModel::stackOnto`) |
+| its own tile, a gap, or another monitor | it goes back to its tile (a retile) |
+| anywhere, with Shift held | it floats, as with `"float"` |
+
+- `swap` trades whole slots: dragging the top window of a stack onto a single tile carries the
+  stack with it, as `wakuc tile move` does. `stackOnto` moves only the dragged window; the stack it
+  leaves shows its next window.
+- A drag that Windows ends with a Snap (released at a screen edge, Windows resizes it) floats the
+  window as today: `MoveSizeEnd` finds the size changed, which is not a swap. See Snap.
+- Resize drags are unchanged: in `mainStack` they move the shared edges (ratio and weights).
+- Not in the first version: another monitor (released there, the window goes back), monocle (a
+  drag of the monocle window floats it or goes back, as today), a paused tiler (nothing is placed,
+  so a drag floats as today).
+
+### Live drop indicator
+
+While the window moves, the tile it would land in is shown, marked by the result (swap, join stack,
+float with Shift, back to its tile).
+
+- **Location events for move drags.** `TilingHooks::trackLocation` follows one window, today only a
+  `mainStack` resize drag (`tracksMouseResize`). It follows every managed window in a title-bar
+  drag of `"swap"`, for the drag's length. The hook stays out-of-context and per-window; it is
+  removed at `MoveSizeEnd`, at destroy and at stop.
+- **Target in the engine.** At `MoveSizeStart` the engine keeps the workspace's tile rectangles
+  (`slotsFor` over `activeWindows`), as the resize drag does. Each `LocationChange` reads the
+  cursor and finds the tile under it; only a change of target or result goes out. The same lookup
+  decides the drop at `MoveSizeEnd`, so what is shown is what happens.
+- **New placer calls.** `WindowPlacer::cursorPosition()` (`GetCursorPos`, physical pixels like the
+  work area and the slots) and `WindowPlacer::modifiers()` (`GetAsyncKeyState` for Shift). The
+  fake placer gets settable fields for both.
+- **To QML.** `Tiling.dropTarget`: `{ active, kind ("swap", "stack", "float", "back"), x, y,
+  width, height, screen }` in the logical coordinates of the screen it is on, with a change signal.
+  Physical to logical goes through the screen that holds the monitor: `QScreen::geometry()` keeps
+  the physical origin with logical size, as in `physicalScreenRect` (host/app_bar), so per-monitor
+  scale is handled there.
+- **Drawing.** Two ways, to decide before code:
+  - a ready-made QML component (`TilingDropIndicator`): a click-through, never-focused window per
+    screen on the overlay layer that draws `dropTarget`, which a shell adds to its `ShellRoot`.
+    Every shell gets the indicator with one line; whether a feature may ship a window component
+    must be checked against the structure rules in `docs/architecture.md`;
+  - only the property, and each shell draws its own (Octalia in `MainScreen`, which already covers
+    the screen and has a click-through mask). Fits a shell's look; each shell does the work.
+
+### Changes by part
+
+| Part | Change |
+|---|---|
+| `tiling_engine.*` | a move-drag state next to `ResizeDrag` (key, tiles at start, current target); `onLocationChange` for move drags; the drop in `onMoveSizeEnd` instead of `setFloating`; a callback for target changes |
+| `window_placer.h`, `win32/window_placer_win.cpp`, `testing/fake_window_placer.h` | `cursorPosition`, `modifiers` |
+| `qml/tiling_service.*` | `dragAction`, `dropTarget` and its signal, the physical to logical mapping, `trackLocation` for move drags |
+| tests | swap, join a stack, own tile, gap, Shift, a Snap, a stack carried by a swap, another monitor, target changes during a drag, hook removed at the end |
+| docs | this section becomes the description; `docs/wiki/wakuc.md` gets the option |
+
+Rough size: the engine, placer and service with tests about 300 to 450 lines; the indicator
+component or the Octalia drawing about 100 more.
+
+### Open questions
+
+- Shift or Alt for float: check what Windows 11 itself does with each held during a title-bar drag
+  (Snap Layouts) before choosing.
+- A modifier to join a single tile as a new stack (today a drop on a single tile swaps).
+- Whether `"swap"` should also apply to windows the tiler floats by rule (no: they are not tiles).
+- Another monitor in a later version: needs an insert at a position in `TilingModel` (today `add`
+  appends) and the target monitor's tiles.
+
 ## Snap
 
 Snap Layouts and Snap Assist are not suppressed: a window the user snaps by mouse floats (move and
-size end).
+size end). With the planned `Tiling.dragAction: "swap"` a snap still floats the window (see Drag to
+swap).
 
 ## Commands
 
@@ -240,6 +320,10 @@ as before. The layout counts slots, not windows.
 - No undocumented API. The shown desktop reuses the registry value on the allowlist.
 
 ## Open points
+
+- Drag to swap is planned, not built (see Drag to swap). Its location hook for move drags would
+  also serve the `settle` rule: today `LocationChange` reaches the engine only for a `mainStack`
+  resize drag, so a settling window's own changes are seen at the readbacks only.
 
 - Keyboard Snap (Win+Arrow) and a maximize emit no event the tiler hooks, so a snapped window is
   noticed at the next retile; a window maximized or restored by the user takes or frees its slot
