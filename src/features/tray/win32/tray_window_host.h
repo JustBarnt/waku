@@ -27,11 +27,15 @@ namespace waku::tray {
 // programs send their icons again to the window that is now found.
 //
 // What is not ours is passed on, and only that: the app bar protocol of SHAppBarMessage
-// (WM_COPYDATA, dwData 0) and the icon rectangle query (dwData 3) go to Explorer's own
-// Shell_TrayWnd (the one in Explorer's process, whatever else has that class), so a program that
-// asks "the taskbar" gets what Explorer answers. Nothing else is forwarded: a window of ours that
-// passed on commands would run them for any sender with waku's identity. The sends are forwarded
-// as sends, with a time limit.
+// (WM_COPYDATA, dwData 0), the icon rectangle query (dwData 3) and the user notification state
+// query of SHQueryUserNotificationState (message 0x4EF) go to Explorer's own Shell_TrayWnd (the
+// one in Explorer's process, whatever else has that class), so a program that asks "the taskbar"
+// gets what Explorer answers. The state query is answered even without Explorer (accepts
+// notifications): left to DefWindowProc it reads 0, and Discord then shows nothing. Explorer's
+// busy is passed on only while another program is full screen in front: Octalia's MainScreen alone
+// makes Explorer say busy (see notification_state.h). Nothing else
+// is forwarded: a window of ours that passed on commands would run them for any sender with
+// waku's identity. The sends are forwarded as sends, with a time limit.
 //
 // The host knows the icons it was sent and `replay()` announces them again, so it can outlive the
 // widget that shows them (a reload) without every program having to send its icon a second time.
@@ -83,6 +87,8 @@ class TrayWindowHost : public TrayHost {
   void run(void* ready);
   std::int64_t onCopyData(void* hwnd, std::uint64_t wParam, std::int64_t lParam);
   std::int64_t forward(void* hwnd, unsigned message, std::uint64_t wParam, std::int64_t lParam);
+  // The reply to SHQueryUserNotificationState: Explorer's, adjusted by userNotificationState().
+  std::int64_t notificationState(void* hwnd, std::uint64_t wParam, std::int64_t lParam);
   void poll(void* hwnd);
   void broadcastTaskbarCreated();
   // Explorer's own Shell_TrayWnd (found by the process that owns it), null when there is none.
@@ -104,6 +110,8 @@ class TrayWindowHost : public TrayHost {
   // Worker thread only: Explorer's process and its taskbar window, as last found.
   std::uint32_t explorerPid_ = 0;
   void* explorerWnd_ = nullptr;
+  // The last user notification state answered, for one debug line per change.
+  std::int64_t lastNotificationState_ = 0;
   // The icons sent so far, merged the way the widget merges them; for replay().
   std::mutex iconsMutex_;
   TrayIconRegistry icons_;

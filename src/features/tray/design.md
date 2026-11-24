@@ -229,6 +229,16 @@ Decisions:
   class. `WM_COMMAND`, `WM_USER`-range and registered messages are not passed on: forwarding them
   would run them against Explorer with waku's identity for any sender, and `WM_COPYDATA` is open
   to lower integrity levels (see Elevation). Any other `dwData` is refused.
+- **The user notification state.** `SHQueryUserNotificationState` sends message `0x4EF` to
+  `Shell_TrayWnd`; left to `DefWindowProc` the answer is 0 and Discord drops every notification. The
+  host asks Explorer's own window, like the app bar messages, and answers accepts notifications (5)
+  without an answer. Explorer says busy (2) whenever a window covers a whole monitor, and Octalia's
+  MainScreen is one, so that busy is passed on only while another program is full screen in front
+  (borderless, uncaptioned, over its whole monitor, not maximized; `notification_state.h`).
+  Explorer itself is left to see the MainScreen as full screen on purpose: with "do not disturb in
+  full screen" it then puts toasts in the notification center without a banner, and the shell shows
+  them from there. Marking the shell's windows `NonRudeHWND` instead made Discord work but brought
+  the Windows banners back next to the shell's own.
 - **Callback messages.** `uCallbackMessage` below `WM_USER` is dropped by the parser: a click on the icon sends that message to the owner window, and `WM_CLOSE` or
   `WM_SYSCOMMAND` there would close or command another program's window.
 - **The host outlives a reload.** The widget (`Systray`) is an engine singleton and is deleted and

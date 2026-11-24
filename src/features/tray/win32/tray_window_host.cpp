@@ -6,9 +6,12 @@
 #include <QDebug>
 #include <cwchar>
 #include <future>
+#include <iterator>
+#include <optional>
 #include <vector>
 
 #include "features/tray/icon_scale.h"
+#include "features/tray/notification_state.h"
 #include "features/tray/tray_pipe.h"
 #include "features/tray/win32/tray_win.h"
 
@@ -26,8 +29,41 @@ constexpr UINT kRecheckDelayMs = 300;
 constexpr ULONGLONG kRebroadcastDelayMs = 2500;
 constexpr ULONGLONG kShellRebroadcastDelayMs = 1500;
 constexpr int kPollsBeforeGivingUp = 2;
+// SHQueryUserNotificationState sends this to Shell_TrayWnd and returns the reply as the
+// QUERY_USER_NOTIFICATION_STATE (undocumented; seen in other tray replacements). DefWindowProc
+// answers 0, which is no state at all: Discord and other programs that wait for
+// QUNS_ACCEPTS_NOTIFICATIONS then drop every notification.
+constexpr UINT kUserNotificationStateQuery = 0x4EF;
+constexpr DWORD kStateQueryTimeoutMs = 500;
 
 constexpr wchar_t kSecondaryClass[] = L"Shell_SecondaryTrayWnd";
+
+// The foreground window, for userNotificationState().
+ForegroundWindow foregroundWindow() {
+  ForegroundWindow result;
+  HWND window = GetForegroundWindow();
+  if (!window || !IsWindowVisible(window) || IsIconic(window)) return result;
+  result.exists = true;
+  DWORD pid = 0;
+  GetWindowThreadProcessId(window, &pid);
+  result.ours = pid == GetCurrentProcessId();
+  wchar_t className[64] = {};
+  GetClassNameW(window, className, static_cast<int>(std::size(className)));
+  result.desktop = window == GetShellWindow() || std::wcscmp(className, L"Progman") == 0 ||
+                   std::wcscmp(className, L"WorkerW") == 0;
+  result.maximized = IsZoomed(window) != FALSE;
+  const LONG_PTR style = GetWindowLongPtrW(window, GWL_STYLE);
+  result.captioned = (style & WS_CAPTION) == WS_CAPTION;
+  RECT rect{};
+  if (GetWindowRect(window, &rect)) result.window = {rect.left, rect.top, rect.right, rect.bottom};
+  MONITORINFO info{};
+  info.cbSize = sizeof(info);
+  if (GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST), &info)) {
+    result.monitor = {info.rcMonitor.left, info.rcMonitor.top, info.rcMonitor.right,
+                      info.rcMonitor.bottom};
+  }
+  return result;
+}
 
 LRESULT CALLBACK hostWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
   auto* host = reinterpret_cast<TrayWindowHost*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
@@ -154,6 +190,8 @@ std::int64_t TrayWindowHost::handle(void* hwndPointer, unsigned message, std::ui
   switch (message) {
     case WM_COPYDATA:
       return onCopyData(hwnd, wParam, lParam);
+    case kUserNotificationStateQuery:
+      return notificationState(hwnd, wParam, lParam);
     case WM_TIMER:
       if (wParam == kRecheckTimer) KillTimer(hwnd, kRecheckTimer);
       if (wParam == kPollTimer || wParam == kRecheckTimer) poll(hwnd);
@@ -229,6 +267,33 @@ std::int64_t TrayWindowHost::onCopyData(void* hwnd, std::uint64_t wParam, std::i
       break;
   }
   return TRUE;
+}
+
+std::int64_t TrayWindowHost::notificationState(void* hwndPointer, std::uint64_t wParam,
+                                               std::int64_t lParam) {
+  HWND hwnd = static_cast<HWND>(hwndPointer);
+  // Explorer knows the state (full screen, presentation mode, quiet time, ...): ask its own
+  // taskbar window, as the app bar messages do. Its busy is then checked against the window in
+  // front (see userNotificationState): the shell's own MainScreen makes Explorer say busy.
+  std::optional<std::int64_t> explorer;
+  if (options_.forwardToExplorer) {
+    if (HWND target = static_cast<HWND>(explorerTaskbar(hwnd))) {
+      DWORD_PTR result = 0;
+      if (SendMessageTimeoutW(target, kUserNotificationStateQuery, static_cast<WPARAM>(wParam),
+                              static_cast<LPARAM>(lParam), SMTO_ABORTIFHUNG, kStateQueryTimeoutMs,
+                              &result)) {
+        explorer = static_cast<std::int64_t>(result);
+      }
+    }
+  }
+  const std::int64_t state = userNotificationState(explorer, foregroundWindow());
+  if (state != lastNotificationState_) {
+    lastNotificationState_ = state;
+    qDebug().noquote() << "Tray window host: user notification state" << state
+                       << QStringLiteral("(Explorer: %1)")
+                              .arg(explorer ? QString::number(*explorer) : QStringLiteral("none"));
+  }
+  return state;
 }
 
 std::int64_t TrayWindowHost::forward(void* hwndPointer, unsigned message, std::uint64_t wParam,

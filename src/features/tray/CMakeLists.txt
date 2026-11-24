@@ -7,6 +7,8 @@ waku_feature(
     icon_bits.cpp
     icon_scale.h
     icon_scale.cpp
+    notification_state.h
+    notification_state.cpp
     tray_click.h
     tray_click.cpp
     tray_host.h
@@ -44,6 +46,7 @@ waku_feature(
     tests/test_tray_icon_bits.cpp
     tests/test_tray_icon_registry.cpp
     tests/test_tray_model.cpp
+    tests/test_tray_notification_state.cpp
     tests/test_tray_pins.cpp
     tests/test_tray_pipe.cpp
     tests/test_tray_widget.cpp
